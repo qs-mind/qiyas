@@ -1033,7 +1033,7 @@ export function useTool(
     ),
     /** The entities selected, to draw highlighted: the modify tool's, or the selection set (less
      *  the select tool's own pick, which is highlighted as picked, maybe inside a block). */
-    selection: modify
+    selection: useMemo(() => modify
       ? modify.handles
       : edit
         ? editHighlight(edit)
@@ -1042,6 +1042,7 @@ export function useTool(
           : param
             ? constraintHighlight(param)
             : state.selection.filter((h) => !state.selected || h !== state.selected.picked.top),
+      [modify, edit, dim, param, state.selection, state.selected?.picked.top]),
     /** The select tool's whole selection set (top-level handles): the properties palette sums
      *  it when two or more are picked. */
     picks: tool === "select" ? state.selection : NO_PICKS,

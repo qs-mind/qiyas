@@ -1,3 +1,4 @@
+import { buildHighlightIndices } from "./gl";
 import { expect, test } from "vitest";
 import {
   curvesNeedRedraw,
@@ -530,4 +531,15 @@ test("wipeout frames are drawn apart, after the lines the wipeouts hide", () => 
   // No wipeout: every line in one span.
   const plain = { ...b, fills: fillsOf([0xff0000, 0xff0000, 0xff0000]) } as Batch;
   expect(wipeoutSpans(plain)).toEqual({ lines: [[0, 10]], frames: [] });
+});
+
+test("highlight indices are an exactly sized Uint32Array in segment order", () => {
+  const batch = parseBatch(v2());
+  const targets = [{handle: 7, chain: []}, {handle: 9, chain: [8]}];
+  const indices = buildHighlightIndices(batch, targets);
+  expect(indices).toBeInstanceOf(Uint32Array);
+  expect(Array.from(indices)).toEqual([0, 1, 2, 3]);
+  expect(buildHighlightIndices(batch, [{handle: 8, chain: []}])).toEqual(new Uint32Array([2, 3]));
+  expect(buildHighlightIndices(batch, [])).toEqual(new Uint32Array());
+  expect(buildHighlightIndices(null, targets)).toEqual(new Uint32Array());
 });

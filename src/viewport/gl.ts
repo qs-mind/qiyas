@@ -520,15 +520,10 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   let overlay: Float64Array | null = null;
 
   function uploadHighlight() {
-    const indices: number[] = [];
-    if (batch) {
-      for (const [first, count] of matchingRanges(batch, highlight)) {
-        for (let v = 2 * first; v < 2 * (first + count); v++) indices.push(v);
-      }
-    }
+    const indices = buildHighlightIndices(batch, highlight);
     highlightCount = indices.length;
     gl.bindVertexArray(vao);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(indices), gl.STATIC_DRAW);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
     gl.bindVertexArray(textVao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, textHighlightIndices);
     textHighlight = batch
@@ -1026,4 +1021,17 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteVertexArray(insetTextVao);
     },
   };
+}
+
+/** Keep matching ranges once, then allocate exactly the vertices needed by the line highlight. */
+export function buildHighlightIndices(batch: Batch | null, targets: Target[]): Uint32Array {
+  const ranges = batch ? Array.from(matchingRanges(batch, targets)) : [];
+  let length = 0;
+  for (const [, count] of ranges) length += 2 * count;
+  const indices = new Uint32Array(length);
+  let at = 0;
+  for (const [first, count] of ranges) {
+    for (let v = 2 * first; v < 2 * (first + count); v++) indices[at++] = v;
+  }
+  return indices;
 }

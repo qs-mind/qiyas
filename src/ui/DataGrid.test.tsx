@@ -232,6 +232,7 @@ test("content sizing measures only rendered rows, caches text and honours manual
   ];
   try {
     const {rerender} = render(<DataGrid label="Many" rows={many} columns={controlsColumns} rowKey={key} storageKey="measured" />);
+    expect(computed.mock.calls.filter(([element]) => element.hasAttribute("data-column"))).toHaveLength(controlsColumns.length * 2);
     expect(screen.getAllByRole("row").length).toBeLessThan(80);
     expect(measured.some(text => text.includes("9999"))).toBe(false);
     expect(context.measureText.mock.calls.length).toBeLessThan(150);
@@ -279,4 +280,43 @@ test("a remembered description width overrides growth until reset", () => {
   fireEvent.doubleClick(screen.getByRole("separator", {name: "Resize column Description"}));
   expect(layout()).toContain("minmax(140px, 1fr)");
   expect(JSON.parse(localStorage.getItem("qiyas.grid.growing")!)).not.toHaveProperty("text");
+});
+
+test("unchanged rows do not repeat computed styles or storage reads", () => {
+  const styles = vi.spyOn(window, "getComputedStyle");
+  const reads = vi.spyOn(Storage.prototype, "getItem");
+  try {
+    const {rerender} = grid({storageKey: "unchanged"});
+    styles.mockClear(); reads.mockClear();
+    rerender(<DataGrid label="Things" columns={columns} rows={items} rowKey={key} storageKey="unchanged" />);
+    expect(styles).not.toHaveBeenCalled();
+    expect(reads.mock.calls.filter(([key]) => key === "qiyas.grid.unchanged")).toHaveLength(0);
+  } finally { styles.mockRestore(); reads.mockRestore(); }
+});
+
+test("twenty resize moves persist once when the drag ends", () => {
+  const {unmount} = grid({storageKey: "drag"});
+  const edge = screen.getByRole("separator", {name: "Resize column Qty"});
+  const rect = vi.spyOn(edge.parentElement!, "getBoundingClientRect").mockReturnValue({width: 70} as DOMRect);
+  const writes = vi.spyOn(Storage.prototype, "setItem");
+  try {
+    fireEvent.mouseDown(edge, {button: 0, clientX: 70});
+    for (let i = 1; i <= 20; i++) act(() => { document.dispatchEvent(new MouseEvent("mousemove", {clientX: 70 + i, bubbles: true})); });
+    expect(writes.mock.calls.filter(([key]) => key === "qiyas.grid.drag")).toHaveLength(0);
+    fireEvent.mouseUp(document, {clientX: 90});
+    expect(writes.mock.calls.filter(([key]) => key === "qiyas.grid.drag")).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem("qiyas.grid.drag")!).qty).toBe(90);
+    unmount();
+    expect(writes.mock.calls.filter(([key]) => key === "qiyas.grid.drag")).toHaveLength(1);
+  } finally { writes.mockRestore(); rect.mockRestore(); }
+});
+
+test("unmount during a resize saves the latest width", () => {
+  const {unmount} = grid({storageKey: "unfinished-drag"});
+  const edge = screen.getByRole("separator", {name: "Resize column Qty"});
+  fireEvent.mouseDown(edge, {clientX: 70});
+  act(() => { document.dispatchEvent(new MouseEvent("mousemove", {clientX: 90, bubbles: true})); });
+  unmount();
+  expect(JSON.parse(localStorage.getItem("qiyas.grid.unfinished-drag")!).qty).toBe(90);
+  fireEvent.mouseUp(document, {clientX: 90});
 });

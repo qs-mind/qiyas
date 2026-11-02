@@ -364,12 +364,15 @@ export function useTakeoff({
     [],
   );
 
-  function showGenerated(handles: number[], sourceSheet: string) {
+  const generatedView = useRef({run, sheet, chooseSheet, setAiHighlight});
+  generatedView.current = {run, sheet, chooseSheet, setAiHighlight};
+  const showGenerated = useCallback((handles: number[], sourceSheet: string) => {
+    const {run, sheet, chooseSheet, setAiHighlight} = generatedView.current;
     void run(async () => {
       if (sourceSheet.toLowerCase() !== sheet.toLowerCase()) await chooseSheet(sourceSheet);
       setAiHighlight(handles);
     });
-  }
+  }, []);
 
   return {
     showGenerated,

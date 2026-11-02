@@ -182,6 +182,7 @@ export function Viewport({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<Renderer | null>(null);
+  const sentHighlight = useRef<Target[] | null>(null);
   const camera = useRef<Camera>({ cx: 0, cy: 0, scale: 1, width: 1, height: 1 });
   /** The world box the user (or the app) last chose to show; a resize keeps it in view. */
   const view = useRef<Bounds | null>(null);
@@ -329,6 +330,7 @@ export function Viewport({
   useEffect(() => {
     const canvas = canvasRef.current!;
     renderer.current = createRenderer(canvas);
+    sentHighlight.current = null;
 
     const resize = () => {
       const { width, height } = canvas.getBoundingClientRect();
@@ -453,7 +455,12 @@ export function Viewport({
   }, [theme, colours?.background, colours?.highlight]);
 
   useEffect(() => {
+    const previous = sentHighlight.current;
+    if (previous?.length === highlight.length && highlight.every((target, i) =>
+      target.handle === previous[i].handle && target.chain.length === previous[i].chain.length &&
+      target.chain.every((handle, j) => handle === previous[i].chain[j]))) return;
     renderer.current!.setHighlight(highlight);
+    sentHighlight.current = highlight.map(({handle, chain}) => ({handle, chain: [...chain]}));
     requestDraw();
   }, [highlight]);
 

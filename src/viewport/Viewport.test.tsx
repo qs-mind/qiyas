@@ -8,17 +8,20 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Batch } from "./batch";
 import { Viewport, type ViewportHandle } from "./Viewport";
 
+const { setHighlight } = vi.hoisted(() => ({ setHighlight: vi.fn() }));
+
 vi.mock("./gl", () => ({
-  createRenderer: () => new Proxy({}, { get: (_t, name) => (name === "dispose" ? () => {} : () => undefined) }),
+  createRenderer: () => new Proxy({}, { get: (_t, name) => (name === "setHighlight" ? setHighlight : () => undefined) }),
 }));
 
 const batch = { bounds: [[0, 0], [100, 50]], quads: [], imageTable: [], images: [], origin: [0, 0], pxPerUnit: 1, baseTol: 0, curveTol: 0 } as unknown as Batch;
 
 beforeEach(() => {
+  setHighlight.mockClear();
   vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON() {} });
   HTMLCanvasElement.prototype.setPointerCapture = vi.fn();
   HTMLCanvasElement.prototype.releasePointerCapture = vi.fn();
-  vi.spyOn(performance, "now");
+  vi.spyOn(performance, "now").mockReturnValue(1000);
 });
 afterEach(() => {
   cleanup();
@@ -159,4 +162,15 @@ test("scrollable overlays keep their wheel without zooming and contain it at the
   const detached = wheel();
   overlay.dispatchEvent(detached);
   expect(detached.defaultPrevented).toBe(false);
+});
+
+test("equal highlight handles and chains are uploaded only once", () => {
+  const props = { batch, atlas: [], tool: "select" as const, theme: "light" as const, onClick: () => {}, onMove: () => {} };
+  const { rerender } = render(<Viewport {...props} highlight={[{handle: 7, chain: [8, 9]}]} />);
+  rerender(<Viewport {...props} highlight={[{handle: 7, chain: [8, 9]}]} />);
+  expect(setHighlight).toHaveBeenCalledTimes(1);
+  rerender(<Viewport {...props} highlight={[{handle: 7, chain: [8, 10]}]} />);
+  expect(setHighlight).toHaveBeenCalledTimes(2);
+  rerender(<Viewport {...props} highlight={[]} />);
+  expect(setHighlight).toHaveBeenCalledTimes(3);
 });

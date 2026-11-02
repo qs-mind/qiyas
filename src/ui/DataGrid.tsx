@@ -157,6 +157,7 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
       })),
     [columns, autoSizes],
   );
+  const [initialSizes] = useState(() => storedSizes(storageKey));
   const table = useTable({
     features,
     columns: defs,
@@ -164,17 +165,28 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
     getRowId: rowKey,
     columnResizeMode: "onChange",
     columnResizeDirection: rtl ? "rtl" : "ltr",
-    initialState: { columnSizing: storedSizes(storageKey) },
+    initialState: { columnSizing: initialSizes },
   });
   const sizing = table.state.columnSizing;
-  useEffect(() => {
-    if (!storageKey) return;
+  const resizing = table.state.columnResizing.isResizingColumn;
+  const startingResize = useRef(false);
+  const pendingSizes = useRef(sizing);
+  const savedSizes = useRef(sizing);
+  const persistSizes = useCallback(() => {
+    if (!storageKey || pendingSizes.current === savedSizes.current) return;
     try {
-      localStorage.setItem(KEY + storageKey, JSON.stringify(sizing));
+      localStorage.setItem(KEY + storageKey, JSON.stringify(pendingSizes.current));
+      savedSizes.current = pendingSizes.current;
     } catch {
       // Not remembered; the columns still change for this session.
     }
-  }, [sizing, storageKey]);
+  }, [storageKey]);
+  useLayoutEffect(() => { pendingSizes.current = sizing; }, [sizing]);
+  useEffect(() => {
+    if (resizing) startingResize.current = false;
+    else if (!startingResize.current) persistSizes();
+  }, [sizing, resizing, persistSizes]);
+  useEffect(() => () => persistSizes(), [persistSizes]);
 
   // The rows in the order shown: sorted, and gathered under their sections.
   const items = useMemo<Item<Row>[]>(() => {
@@ -237,34 +249,51 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
 
   // Text measurement only visits mounted cells, never the complete row set. The canvas cache
   // avoids reshaping the same strings while scrolling. Font loading invalidates those widths.
-  useLayoutEffect(() => { setAutoSizes({}); }, [rows, lang]);
+  const measuredRows = useRef(new WeakSet<Element>());
+  const columnStyles = useRef(new Map<string, CSSStyleDeclaration>());
+  const invalidateMeasurements = useCallback(() => {
+    measuredRows.current = new WeakSet();
+    columnStyles.current.clear();
+    setAutoSizes({});
+  }, []);
+  const hasActions = !!actions;
+  useLayoutEffect(invalidateMeasurements, [rows, columns, hasActions, lang, invalidateMeasurements]);
   useEffect(() => {
-    const loaded = () => { clearTextWidths(); setAutoSizes({}); virtual.measure(); };
+    const loaded = () => { clearTextWidths(); invalidateMeasurements(); virtual.measure(); };
     document.fonts?.addEventListener("loadingdone", loaded);
     return () => document.fonts?.removeEventListener("loadingdone", loaded);
-  }, [virtual]);
+  }, [virtual, invalidateMeasurements]);
   useLayoutEffect(() => {
-    if (actions) {
-      const widths = Array.from(scroller.current?.querySelectorAll<HTMLElement>(".grid-actions") ?? [], (element) => element.offsetWidth);
-      setActionsWidth((old) => Math.max(old, ...widths));
-    }
     const measured: Record<string, number> = {};
-    scroller.current?.querySelectorAll<HTMLElement>("[data-column]").forEach((element) => {
-      const id = element.dataset.column!;
-      const column = byId.get(id)!;
-      const css = getComputedStyle(element);
-      const control = element.querySelector("input, select, textarea");
-      // Native controls keep their visible value outside textContent; unchosen options are hidden.
-      const text = control instanceof HTMLSelectElement
-        ? Array.from(control.selectedOptions, (option) => option.textContent ?? "").join(" ")
-        : control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
-          ? control.value : element.textContent ?? "";
-      const width = textWidth(text, css);
-      if (!width) return;
-      const padding = (parseFloat(css.paddingLeft) || 6) + (parseFloat(css.paddingRight) || 6);
-      const extra = element.getAttribute("role") === "columnheader" ? 14 : element.querySelector("select, svg") ? 22 : 2;
-      measured[id] = Math.max(measured[id] ?? 0, Math.min(column.maxAutoSize ?? 360, Math.ceil(width + padding + extra)), column.minSize ?? 40);
+    let actionWidth = 0;
+    scroller.current?.querySelectorAll<HTMLElement>('[role="row"]').forEach((row) => {
+      if (measuredRows.current.has(row)) return;
+      measuredRows.current.add(row);
+      if (actions) actionWidth = Math.max(actionWidth, row.querySelector<HTMLElement>(".grid-actions")?.offsetWidth ?? 0);
+      row.querySelectorAll<HTMLElement>("[data-column]").forEach((element) => {
+        const id = element.dataset.column!;
+        const column = byId.get(id)!;
+        // Header typography can differ from body typography; read each once per column.
+        const styleKey = `${element.getAttribute("role")}:${id}`;
+        let css = columnStyles.current.get(styleKey);
+        if (!css) {
+          css = getComputedStyle(element);
+          columnStyles.current.set(styleKey, css);
+        }
+        const control = element.querySelector("input, select, textarea");
+        // Native controls keep their visible value outside textContent; unchosen options are hidden.
+        const text = control instanceof HTMLSelectElement
+          ? Array.from(control.selectedOptions, (option) => option.textContent ?? "").join(" ")
+          : control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
+            ? control.value : element.textContent ?? "";
+        const width = textWidth(text, css);
+        if (!width) return;
+        const padding = (parseFloat(css.paddingLeft) || 6) + (parseFloat(css.paddingRight) || 6);
+        const extra = element.getAttribute("role") === "columnheader" ? 14 : element.querySelector("select, svg") ? 22 : 2;
+        measured[id] = Math.max(measured[id] ?? 0, Math.min(column.maxAutoSize ?? 360, Math.ceil(width + padding + extra)), column.minSize ?? 40);
+      });
     });
+    if (actions) setActionsWidth((old) => Math.max(old, actionWidth));
     setAutoSizes((old) => {
       const next = { ...old };
       let changed = false;
@@ -312,8 +341,6 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
     e.preventDefault();
   }
 
-  const resizing = table.state.columnResizing.isResizingColumn;
-
   return (
     <div
       className={resizing ? "grid grid-resizing" : "grid"}
@@ -359,11 +386,13 @@ export function DataGrid<Row extends object>(props: GridProps<Row>) {
                     aria-valuemin={c.minSize ?? 40}
                     tabIndex={0}
                     onMouseDown={(event) => {
+                      startingResize.current = true;
                       const width = event.currentTarget.parentElement?.getBoundingClientRect().width;
                       if (width) flushSync(() => table.setColumnSizing((old) => ({ ...old, [h.column.id]: width })));
                       h.getResizeHandler()(event);
                     }}
                     onTouchStart={(event) => {
+                      startingResize.current = true;
                       const width = event.currentTarget.parentElement?.getBoundingClientRect().width;
                       if (width) flushSync(() => table.setColumnSizing((old) => ({ ...old, [h.column.id]: width })));
                       h.getResizeHandler()(event);
