@@ -88,7 +88,8 @@ fn a_10_m_line_in_a_1_to_100_viewport_measures_100_mm_on_a1() {
             model_bounds: None,
             paper_centre: None,
             target: None,
-            scale: None,
+            // An explicit scale preserves this 800 mm frame instead of fitting it to the ink.
+            scale: Some(qiyas_core::ViewportScale::Number(5.0)),
             centre: None,
             corner1: [20.0, 20.0],
             corner2: [820.0, 570.0],

@@ -41,7 +41,9 @@ def tool(name, op, args):
                       "input": {"op": op, "args": args}}), flush=True)
     result = request("tools/call", {"name": name, "arguments": {"op": op, "args": args}})
     assert not result.get("isError"), result
-    return json.loads(result["content"][0]["text"])
+    wire = json.loads(result["content"][0]["text"])
+    assert wire["type"] == "result", wire
+    return wire["outcome"]["data"]
 
 
 request("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},

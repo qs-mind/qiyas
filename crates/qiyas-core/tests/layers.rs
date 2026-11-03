@@ -253,14 +253,23 @@ fn layer_colour_linetype_weight_lock_and_plot_are_edited() {
             },
         );
     }
-    refused(
-        &mut s,
-        Command::SetLayer {
-            name: "NOPE".into(),
-            prop: LayerProp::On,
-            value: json!(false),
-        },
-    );
+    let out = s
+        .run_input(
+            &json!({"type":"set_layer","name":"S-COLUMN","prop":"on","value":false}),
+            qiyas_core::Source::User,
+        )
+        .unwrap();
+    assert!(layer(&s, "S-COLUMN").flags.off);
+    assert!(out
+        .advice
+        .iter()
+        .any(|advice| advice["code"] == "layer_created" && advice["name"] == "S-COLUMN"));
+    assert!(s.undo());
+    assert!(!s.drawing.doc.layers.contains("S-COLUMN"));
+    assert!(s.redo());
+    assert!(layer(&s, "S-COLUMN").flags.off);
+    assert!(s.undo());
+    assert!(!s.drawing.doc.layers.contains("S-COLUMN"));
     // Five steps.
     for _ in 0..5 {
         assert!(s.undo());

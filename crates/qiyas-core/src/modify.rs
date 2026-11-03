@@ -1333,16 +1333,17 @@ impl Session {
         pieces: &[(Handle, Vec<u64>)],
         merged: &[(Handle, Handle)],
     ) -> usize {
-        for (old, replacements) in pieces {
-            if replacements.as_slice() != [old.value()] {
-                self.handle_replacements
-                    .insert(old.value(), replacements.clone());
-            }
-        }
-        for (old, new) in merged {
-            self.handle_replacements
-                .insert(old.value(), vec![new.value()]);
-        }
+        self.remember_handle_replacements(
+            &pieces
+                .iter()
+                .map(|(old, replacements)| (old.value(), replacements.clone()))
+                .chain(
+                    merged
+                        .iter()
+                        .map(|(old, new)| (old.value(), vec![new.value()])),
+                )
+                .collect(),
+        );
         for m in &mut self.takeoff.items {
             if !m.chain.is_empty() {
                 continue;

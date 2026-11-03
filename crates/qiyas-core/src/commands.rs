@@ -1494,7 +1494,7 @@ pub enum Command {
     #[schemars(extend("x-category" = "records"))]
     #[schemars(example = json!({"type": "set_records", "collection": "entities", "updates": [{"key": 1234, "path": "/radius", "value": 0.75}]}))]
     #[schemars(example = json!({"type": "set_records", "collection": "layers", "updates": [{"key": "A-WALL", "path": "/line_weight", "value": {"Value": 50}}]}))]
-    #[schemars(example = json!({"type": "set_records", "collection": "viewports", "updates": [{"key": 1234, "path": "/view_height", "value": 50.0}]}))]
+    #[schemars(example = json!({"type": "set_records", "collection": "viewports", "updates": [{"key": 1234, "path": "/common/color", "value": {"Index": 1}}]}))]
     SetRecords {
         collection: crate::records::Collection,
         updates: Vec<crate::RecordUpdate>,

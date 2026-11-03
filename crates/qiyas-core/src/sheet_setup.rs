@@ -1164,7 +1164,12 @@ mod tests {
         let zone = plan_zone(&zones_of(297.0, 420.0, &[]));
         assert_eq!(best_denominator(12.0, 15.0, &zone), Some(75.0));
         assert_eq!(best_denominator(0.5, 0.5, &zone), Some(5.0));
-        assert_eq!(best_denominator(1.0e6, 1.0e6, &zone), None);
+        assert_eq!(best_denominator(1.0e6, 1.0e6, &zone), Some(5.0e6));
+        let unusable = Zone {
+            right: zone.left,
+            ..zone
+        };
+        assert_eq!(best_denominator(1.0e6, 1.0e6, &unusable), None);
     }
 
     #[test]

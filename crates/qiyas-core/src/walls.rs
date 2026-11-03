@@ -1193,7 +1193,18 @@ impl Session {
                                     .and_then(|(h, _, _)| {
                                         self.drawing.doc.get_entity(Handle::new(*h))
                                     })
-                                    .and_then(crate::opening_schedule::mark),
+                                    .and_then(|entity| {
+                                        crate::objects::instance(entity)
+                                            .and_then(|object| {
+                                                object
+                                                    .props
+                                                    .get("mark")
+                                                    .and_then(serde_json::Value::as_str)
+                                                    .filter(|mark| !mark.is_empty())
+                                                    .map(str::to_owned)
+                                            })
+                                            .or_else(|| crate::opening_schedule::mark(entity))
+                                    }),
                                 insert: group
                                     .members
                                     .iter()

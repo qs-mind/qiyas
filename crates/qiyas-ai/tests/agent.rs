@@ -1097,6 +1097,7 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
         let second = &mock.requests()[1].body["messages"];
         let calls = second[2]["tool_calls"].as_array().unwrap();
         assert_eq!(calls.len(), 3);
+        assert_eq!(calls[2]["id"], "f3");
         assert_eq!(calls[2]["function"]["name"], "qiyas_read");
         assert_eq!(
             second[2]["content"], "",
@@ -1105,17 +1106,32 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
         assert_eq!(second[5]["tool_call_id"], "f3");
 
         let (result, _) = turn(&mut agent, "Again").await;
-        assert!(
-            matches!(result, Err(AiError::Api { status: 400, ref message, .. })
-            if message == "The request was rejected")
-        );
+        let Err(AiError::Api { status: 400, message, request: Some(request), .. }) = result else {
+            panic!("expected a rejection with the sent request: {result:?}");
+        };
+        assert_eq!(message, "The request was rejected");
+        assert!(request.chars().count() <= qiyas_ai::log::MAX_TEXT + 1);
+        assert!(request.contains("Again"), "the latest user message stays in the request tail");
+        let requests = mock.requests();
+        let failed_messages = requests.last().unwrap().body["messages"].as_array().unwrap();
+        assert!(failed_messages.iter().any(|message| {
+            message["role"] == "assistant"
+                && message["tool_calls"].as_array().is_some_and(|calls| {
+                    calls.iter().any(|call| call["id"] == "f3")
+                })
+        }));
+        assert_eq!(failed_messages.iter().filter(|message| {
+            message["role"] == "tool" && message["tool_call_id"] == "f3"
+        }).count(), 1);
 
         let text = std::fs::read_to_string(dir.path().join("logs").join("agent.log")).unwrap();
+        assert!(text.contains(&format!("\n    The request: {request}\n")));
         for part in [
             "USER\n    What is in the drawing?",
             "REQUEST 1; sent: ",
             "ANSWER 1 (",
             r#"call qiyas_read (f2): {"args":"{}","op":"state"}"#,
+            r#"call qiyas_read (f3): {"args":{"collection":"takeoff"},"op":"records"}"#,
             "TOOL qiyas_read (",
             "text: Done.",
             "DONE\n",
@@ -1124,9 +1140,8 @@ async fn gemini_parallel_calls_run_apart_and_the_log_tells_the_whole_turn() {
             // A 4xx logs what was sent (its last 4,000 characters after "…" when longer),
             // so the next refusal can be read in the log.
             "\n    The request: ",
-            // The tail can start inside the assistant message; openai.rs tests its empty content.
-            r#""id":"f3","type":"function"}]}"#,
-            r#""role":"tool","tool_call_id":"f3""#,
+            // Earlier calls/results can fall outside the bounded request tail; the failed
+            // request's protocol pairs are checked above and calls remain in the answer log.
             " tools: ",
         ] {
             assert!(text.contains(part), "the log lacks {part:?}:\n{text}");

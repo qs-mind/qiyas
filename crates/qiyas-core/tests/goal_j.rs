@@ -53,13 +53,26 @@ fn quantities_in_notes_advise_real_citations_in_every_drawing_unit() {
             json!({"type":"add_markup","kind":"note","points":[[k,k]],"text":format!("21 m² [takeoff:{id}-missing]")}),
             json!({"type":"add_measurement","kind":"item","unit":"markup","value":0,"points":[[k,k]],"description":"Check this room","note":"٢١ م²","empty_item":true}),
         ] {
-            // A printed id is advised against first, then the missing citation; nothing else.
-            let expected: &[&str] = if v.to_string().contains("takeoff:") {
-                &["internal_id_in_text", "uncited_quantity"]
+            // A printed id is advised against first, then the missing citation. The first
+            // comment also discloses its newly created annotation layer.
+            let comment = v["type"] == "comment";
+            let mut expected = if v.to_string().contains("takeoff:") {
+                vec!["internal_id_in_text", "uncited_quantity"]
             } else {
-                &["uncited_quantity"]
+                vec!["uncited_quantity"]
             };
+            if comment {
+                expected.push("layer_created");
+            }
             let out = run(&mut s, v);
+            if comment {
+                assert!(out["advice"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|advice| advice["code"] == "layer_created"
+                        && advice["name"] == qiyas_core::COMMENT_LAYER));
+            }
             let mut codes: Vec<String> = out["advice"]
                 .as_array()
                 .unwrap()

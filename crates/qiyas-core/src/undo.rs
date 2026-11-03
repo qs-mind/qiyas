@@ -467,16 +467,14 @@ impl DocChange {
         for handle in self.added {
             if let Some(entity) = doc.remove_entity_arc(handle) {
                 redo.removed.push(entity);
-                if !self.label.is_empty() {
+                // Redo restored the recorded forward fate above. Only undo needs to
+                // describe additions that it removes; overwriting on redo loses replacements.
+                if !self.reversed && !self.label.is_empty() {
                     let old = handles.insert(
                         handle.value(),
                         crate::handle_refs::HandleFate {
                             replacements: reverse.remove(&handle.value()).unwrap_or_default(),
-                            step: format!(
-                                "{} {}",
-                                if self.reversed { "redo" } else { "undo" },
-                                self.label
-                            ),
+                            step: format!("undo {}", self.label),
                         },
                     );
                     redo.handles.entry(handle.value()).or_insert(old);

@@ -549,6 +549,9 @@ mod tests {
             "expected_revision",
             "After stale_read reread changed handles",
             "make_sheet prepares it, arrange separates content",
+            "Omit scale in make_sheet or mview",
+            "text_over_text and text_over_lines",
+            "اترك scale في make_sheet أو mview",
             "Name delivered files without paths",
         ] {
             assert!(execute.description.contains(rule), "{rule}");

@@ -29,7 +29,15 @@ fn results(req: &TurnRequest) -> Vec<Value> {
             } => {
                 assert!(!is_error, "Tool failed: {content:?}");
                 content.iter().find_map(|p| match p {
-                    ResultPart::Text(t) => serde_json::from_str(t).ok(),
+                    ResultPart::Text(t) => {
+                        let wire: Value = serde_json::from_str(t).ok()?;
+                        assert_eq!(wire["type"], "result", "{wire}");
+                        Some(
+                            wire.pointer("/outcome/data")
+                                .expect("result payload")
+                                .clone(),
+                        )
+                    }
                     _ => None,
                 })
             }

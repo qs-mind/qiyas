@@ -45,7 +45,11 @@ async fn call(
         .await
         .unwrap();
     assert_ne!(answer.is_error, Some(true), "{answer:?}");
-    serde_json::from_str(&answer.content[0].as_text().unwrap().text).unwrap()
+    let wire: Value = serde_json::from_str(&answer.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(wire["type"], "result", "{wire}");
+    wire.pointer("/outcome/data")
+        .expect("result payload")
+        .clone()
 }
 
 fn adapt(kit: &Value) -> Value {

@@ -1866,6 +1866,7 @@ impl Session {
         }
         let mut raw = serde_json::to_value(&cmd)
             .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
+        let original = raw.clone();
         if self.tx_depth == 0 {
             self.handle_replacements.clear();
         }
@@ -1876,8 +1877,13 @@ impl Session {
                 .iter()
                 .map(|w| serde_json::to_value(w).expect("warning")),
         );
-        cmd = serde_json::from_value(raw.clone())
-            .map_err(|e| CoreError::InvalidCommand(e.to_string()))?;
+        // Keep native values intact unless a reference actually changed. JSON represents
+        // non-finite numbers as null, so an unconditional round trip would turn an invalid
+        // Some(NaN) into None before the command can reject it.
+        if raw != original {
+            cmd = serde_json::from_value(raw.clone())
+                .map_err(|e| CoreError::InvalidCommand(e.to_string()))?;
+        }
         let report = self.validate_input(&raw);
         if !report.valid {
             return Err(crate::input::with_warnings(

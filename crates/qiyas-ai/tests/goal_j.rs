@@ -19,7 +19,7 @@ fn latest_rows(req: &TurnRequest) -> Vec<Value> {
                 for p in content {
                     if let ResultPart::Text(t) = p {
                         if let Ok(v) = serde_json::from_str::<Value>(t) {
-                            if let Some(rows) = v["records"].as_array() {
+                            if let Some(rows) = v["outcome"]["data"]["records"].as_array() {
                                 return Some(rows.clone());
                             }
                         }
@@ -443,10 +443,20 @@ fn surface_normalisations_are_reported_and_ambiguous_inputs_stay_invalid() {
     }
     let out=surface_call(&mut s,READ,json!({"op":"records","args":{"collection":"entities","where":{"path":"type","op":"eq","value":"Text"}}})).unwrap();
     assert_eq!(out["total"], 2);
-    assert!(out["warnings"][0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("where"));
+    assert!(
+        out["warnings"].as_array().unwrap().iter().any(|warning| {
+            warning["code"] == "normalised_input"
+                && warning["pointer"] == "/args/where"
+                && warning["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("path/value"))
+        }),
+        "{out}"
+    );
+    assert!(
+        qiyas_ai::surface::route(READ, &json!({"op":"measure","args":{"handles":[1,2]}})).is_ok(),
+        "multiple explicit handles are a supported measurement form"
+    );
     assert!(qiyas_ai::surface::route(
         EXECUTE,
         &json!({"command":{"type":"new_layer","name":"Normalised"}})
@@ -455,7 +465,6 @@ fn surface_normalisations_are_reported_and_ambiguous_inputs_stay_invalid() {
     for input in [
         json!({"op":"query","args":{"kind":"window","corner1":[0,0]}}),
         json!({"op":"query","args":{"kind":"window","bounds":[[0,0],[5,5]],"corner1":[0,0],"corner2":[5,5]}}),
-        json!({"op":"measure","args":{"handles":[1,2]}}),
         json!({"op":"measure","args":{"handle":1,"handles":[1]}}),
     ] {
         assert!(qiyas_ai::surface::route(READ, &input).is_err());

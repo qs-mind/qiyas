@@ -842,7 +842,8 @@ impl Session {
             };
             let mut previous = std::mem::take(&mut session.last_change);
             // run_input resolves handles before validation and keeps each replacement warning.
-            let report = session.run_input(&input, source);
+            let report =
+                session.with_batch_step(template, |session| session.run_input(&input, source));
             let change = std::mem::take(&mut session.last_change);
             let mut handles = change.added.clone();
             handles.extend(change.changed.iter().copied());

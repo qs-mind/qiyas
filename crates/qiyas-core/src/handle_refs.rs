@@ -23,13 +23,7 @@ pub(crate) fn history_delta(before: &HandleHistory, after: &HandleHistory) -> Ha
 }
 
 impl Session {
-    pub(crate) fn remember_replacements(
-        &mut self,
-        map: &BTreeMap<u64, Vec<u64>>,
-    ) -> Result<(), CoreError> {
-        if map.is_empty() {
-            return Ok(());
-        }
+    pub(crate) fn remember_handle_replacements(&mut self, map: &BTreeMap<u64, Vec<u64>>) {
         for (&old, new) in map {
             if new.as_slice() != [old] {
                 self.handle_replacements.insert(old, new.clone());
@@ -42,6 +36,16 @@ impl Session {
                 );
             }
         }
+    }
+
+    pub(crate) fn remember_replacements(
+        &mut self,
+        map: &BTreeMap<u64, Vec<u64>>,
+    ) -> Result<(), CoreError> {
+        if map.is_empty() {
+            return Ok(());
+        }
+        self.remember_handle_replacements(map);
         let schedules: Vec<_> = self
             .drawing
             .doc

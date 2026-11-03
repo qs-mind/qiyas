@@ -613,7 +613,7 @@ fn method_defaults_keep_citations_required_and_report_the_chosen_values() {
     let mut s = natural_input_session();
     let citation = json!({"source":"drawing","clause":"Wall paths"});
     let input = json!({"type":"measurement","kind":"set_method","method":{"name":"Tower floor geometry","rules":[{
-        "id":"length","unit":"m","terms":[{"operation":"add","factors":["geometry.length"],"citation":citation}],"citation":citation
+        "id":"length","element_type":"Tower wall","unit":"m","terms":[{"operation":"add","factors":["geometry.length"],"citation":citation}],"citation":citation
     }]}});
     let out = s.run_input(&input, Source::Ai).unwrap();
     for (field, value) in [

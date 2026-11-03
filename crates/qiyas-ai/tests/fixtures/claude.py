@@ -123,7 +123,9 @@ elif "-p" in args:
             print(json.dumps({"type": "user", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": identifier, "content": result["content"]}
             ]}}), flush=True)
-            return json.loads(next(part["text"] for part in result["content"] if part["type"] == "text"))
+            wire = json.loads(next(part["text"] for part in result["content"] if part["type"] == "text"))
+            assert wire["type"] == "result", wire
+            return wire["outcome"]["data"]
 
         assert tool("qiyas_read", "records", {"collection": "entities"})["total"] == 0
         units_per_metre = scenario.get("units_per_metre", 1)

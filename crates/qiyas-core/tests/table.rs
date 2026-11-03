@@ -56,7 +56,11 @@ fn text_of(s: &Session, h: u64) -> String {
 
 /// The texts the table's `*T` block draws.
 fn block_texts(s: &Session, h: u64) -> Vec<String> {
-    let name = table(s, h).block_name;
+    let t = table(s, h);
+    let name = qiyas_geom::table_block(&s.drawing.doc, &t)
+        .expect("the table's picture block")
+        .name
+        .clone();
     assert!(name.starts_with("*T"), "{name}");
     s.drawing
         .doc

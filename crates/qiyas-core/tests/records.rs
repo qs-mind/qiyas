@@ -384,7 +384,7 @@ fn set_records_on_layers_and_the_header() {
 }
 
 #[test]
-fn a_viewport_scale_is_set_through_its_record() {
+fn a_viewport_scale_record_edit_directs_to_mview_and_preserves_the_frame() {
     let (_dir, mut s) = session("dxf");
     let layout = s
         .drawing
@@ -420,16 +420,60 @@ fn a_viewport_scale_is_set_through_its_record() {
         .unwrap();
     assert_eq!(page.records.len(), 1);
     let height = page.records[0]["data"]["view_height"].as_f64().unwrap();
-    set(
+    let view = s
+        .paper_views()
+        .into_iter()
+        .find(|v| v.handle == vp)
+        .unwrap();
+    let steps = s.history_steps().0.len();
+    let error = set(
         &mut s,
         Collection::Viewports,
         vec![update(json!(vp), "/view_height", json!(height * 2.0))],
     )
+    .unwrap_err();
+    assert!(error.contains("mview"), "{error}");
+    assert_eq!(s.history_steps().0.len(), steps);
+    assert_eq!(
+        s.paper_views()
+            .into_iter()
+            .find(|v| v.handle == vp)
+            .unwrap(),
+        view
+    );
+    s.run(Command::MView {
+        model_bounds: None,
+        paper_centre: None,
+        target: Some(qiyas_core::Target {
+            handle: vp,
+            chain: Vec::new(),
+        }),
+        scale: Some(qiyas_core::ViewportScale::Number(view.scale / 2.0)),
+        centre: Some(view.centre),
+        corner1: view.rect[0],
+        corner2: view.rect[1],
+    })
     .unwrap();
     match s.drawing.doc.get_entity(Handle::new(vp)).unwrap() {
         EntityType::Viewport(v) => assert_eq!(v.view_height, height * 2.0),
         _ => unreachable!(),
     }
+    let changed = s
+        .paper_views()
+        .into_iter()
+        .find(|v| v.handle == vp)
+        .unwrap();
+    assert_eq!(changed.rect, view.rect);
+    assert_eq!(changed.centre, view.centre);
+    assert_eq!(s.history_steps().0.len(), steps + 1);
+    assert!(s.undo());
+    assert_eq!(
+        s.paper_views()
+            .into_iter()
+            .find(|v| v.handle == vp)
+            .unwrap(),
+        view
+    );
 }
 
 #[test]

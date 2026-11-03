@@ -441,11 +441,15 @@ mod tests {
             json!({"kind":"boundary","point":[0,0]}),
             json!({"kind":"layers","offset":0,"limit":20}),
             json!({"kind":"texts","limit":20}),
+            json!({"kind":"texts","contains":"Room"}),
         ] {
             assert!(validate(READ, "query", &args).is_ok(), "{args}");
         }
         for (args, pointer) in [
-            (json!({"kind":"texts","contains":"Room"}), "/args/contains"),
+            (
+                json!({"kind":"texts","contains_typo":"Room"}),
+                "/args/contains_typo",
+            ),
             (json!({"kind":"blocks","name":"DOOR"}), "/args/name"),
             (
                 json!({"kind":"tables","within_typo":[[0,0],[1,1]]}),

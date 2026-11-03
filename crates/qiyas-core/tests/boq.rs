@@ -96,8 +96,12 @@ fn set_boq_tolerance_sets_and_undoes() {
         session.run(tolerance("Z.9", Some(1.0))).unwrap(),
         Outcome::Nothing
     ));
-    assert!(session.run(tolerance("A.1", Some(-1.0))).is_err());
-    assert!(session.run(tolerance("A.1", Some(f64::NAN))).is_err());
+    for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let revision = session.revision();
+        assert!(session.run(tolerance("A.2", Some(invalid))).is_err());
+        assert_eq!(session.boq.as_ref().unwrap().items[1].tolerance, Some(2.5));
+        assert_eq!(session.revision(), revision);
+    }
 
     assert!(session.undo());
     assert_eq!(session.boq.as_ref().unwrap().items[1].tolerance, None);

@@ -156,7 +156,11 @@ impl Session {
             }
             if matches!(field, "sheet" | "source_sheet") {
                 if let Some(name) = value.as_str() {
-                    *value = json!(session.drawing.resolve_sheet(name)?.block);
+                    let sheet = session
+                        .drawing
+                        .resolve_sheet(name)
+                        .map_err(|error| CoreError::InvalidCommand(format!("{field}: {error}")))?;
+                    *value = json!(sheet.block);
                     return Ok(());
                 }
             }
@@ -264,6 +268,9 @@ impl Session {
             .extend(crate::registry::normalization_warnings(raw));
         let parsed = serde_path_to_error::deserialize::<_, Command>(input.clone());
         if !report.valid {
+            for issue in &mut report.errors {
+                issue.pointer = format!("{}{}", self.batch_step_path, issue.pointer);
+            }
             let mut message = report.message();
             if let Err(error) = parsed {
                 message.push_str(&format!("; {} at {}", error.inner(), error.path()));

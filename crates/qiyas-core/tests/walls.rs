@@ -788,7 +788,7 @@ fn opening_marks_are_accepted_at_creation_and_survive_rebuilds() {
     assert_eq!(groups[0].runs[0].openings[1].mark.as_deref(), Some("D-M2"));
     let insert = groups[0].runs[0].openings[1].insert;
     s.run_input(
-        &json!({"type":"edit_wall_opening","insert":insert,"edit":{"mark":"D-M3","width":1.2}}),
+        &json!({"type":"edit_wall_opening","insert":insert,"mark":"D-M3","width":1.2}),
         qiyas_core::Source::Ai,
     )
     .unwrap();

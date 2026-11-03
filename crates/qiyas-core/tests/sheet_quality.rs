@@ -213,7 +213,10 @@ fn wall_area_bases_are_distinct_in_measurement_and_bilingual_exports() {
         json!({"id":id,"kind":"area","basis":"geometric","element_type":"Legacy wall","unit":"m2",
         "terms":[{"label":"Wall area","operation":"add","factors":factors,"citation":cite}],"deductions":deductions,"citation":cite})
     };
-    let openings = json!([{"element_type":"Legacy door","when":"true","term":{"label":"Opening","operation":"deduct","factors":["void.width","void.host_width"],"citation":cite}}]);
+    // This drawing's door lies inside its host run; the test method explicitly deducts it.
+    let openings = json!([{"element_type":"Legacy door","when":"true",
+        "boundary":{"when":"false","deduct_when":"true","citation":cite},
+        "term":{"label":"Opening","operation":"deduct","factors":["void.width","void.host_width"],"citation":cite}}]);
     run(
         &mut s,
         json!({"type":"measurement","kind":"set_mappings","mappings":[

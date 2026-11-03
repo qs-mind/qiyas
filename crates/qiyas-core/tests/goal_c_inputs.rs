@@ -111,7 +111,12 @@ fn layer_shorthand_is_atomic_and_handles_alias_uses_the_shared_boundary() {
         &mut s,
         json!({"type":"delete_entities","handles":[h.as_u64().unwrap().to_string()]}),
     );
-    assert_eq!(read(&s, json!({"handles":[h]})).unwrap()["total"], 0);
+    let error = read(&s, json!({"handles":[h]})).unwrap_err().to_string();
+    assert!(
+        error.contains("erased") && error.contains("delete_entities"),
+        "{error}"
+    );
+    assert_eq!(read(&s, json!({})).unwrap()["total"], 0);
 }
 
 #[test]

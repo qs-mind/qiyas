@@ -139,18 +139,6 @@ fn recorded_schema_mistakes_name_the_right_field_or_shape() {
         (EXECUTE, "batch", json!({"commands":[],"color":4}), "color"),
         (
             READ,
-            "records",
-            json!({"collection":"objects","where":{"id":97}}),
-            "path",
-        ),
-        (
-            READ,
-            "records",
-            json!({"collection":"entities","where":{"sheet":"*Paper_Space"}}),
-            "path",
-        ),
-        (
-            READ,
             "check",
             json!({"rules":["zero_length","opening_outside_wall"]}),
             "tiny_segment",
@@ -163,6 +151,36 @@ fn recorded_schema_mistakes_name_the_right_field_or_shape() {
             .to_string();
         assert!(error.contains(field), "{op}: {error}");
     }
+    // Single-key filters now have one unambiguous path/value interpretation.
+    for (query, expected) in [
+        (
+            json!({"collection":"objects","where":{"id":97}}),
+            json!([{"path":"id","value":97}]),
+        ),
+        (
+            json!({"collection":"entities","where":{"sheet":"*Paper_Space"}}),
+            json!([{"path":"sheet","value":"*Paper_Space"}]),
+        ),
+    ] {
+        let (args, warnings) = crate::normalise::args(READ, "records", &query).unwrap();
+        assert_eq!(args["where"], expected);
+        assert!(warnings
+            .iter()
+            .any(|w| w.code == "normalised_input" && w.pointer == "/args/where"));
+        assert!(crate::surface_args::validate(READ, "records", &args)
+            .unwrap()
+            .is_empty());
+    }
+    // Multiple shorthand keys remain ambiguous and must not silently drop a filter.
+    let (args, _) = crate::normalise::args(
+        READ,
+        "records",
+        &json!({
+            "collection":"objects","where":{"id":97,"sheet":"*Model_Space"}
+        }),
+    )
+    .unwrap();
+    assert!(qiyas_core::registry::parse_command(json!({"type":"records","query":args})).is_err());
     let cases = [
         (
             json!({"type":"set_property","targets":[{"handle":479}],"property":"layer","value":"A-ANNO-TAGS"}),
@@ -200,9 +218,21 @@ fn recorded_schema_mistakes_name_the_right_field_or_shape() {
 fn recorded_semantic_failures_name_source_sheet_and_sheet_fit_controls() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = qiyas_core::Session::new_blank(&dir.path().join("airport.dxf"), 6);
+    let schedule = session
+        .run_input(
+            &json!({"type":"opening_schedule","at":[0,0],"source_sheet":"Model","language":"en"}),
+            qiyas_core::Source::Ai,
+        )
+        .unwrap();
+    assert!(matches!(
+        schedule.outcome,
+        qiyas_core::Outcome::Added { .. }
+    ));
+    assert!(session.undo());
+    assert!(!session.can_undo());
     for (command, field) in [
         (
-            json!({"type":"opening_schedule","at":[0,0],"source_sheet":"Model","language":"en"}),
+            json!({"type":"opening_schedule","at":[0,0],"source_sheet":"Model_typo","language":"en"}),
             "source_sheet",
         ),
         (
@@ -234,16 +264,40 @@ fn recorded_wrong_artifact_pointers_name_available_evidence_fields() {
         ),
         (
             json!({"call_id":"example-call","content":[],"is_error":false,"operation":"records"}),
-            "/outcome/result",
+            "/outcome/result/contnet",
             "content",
         ),
     ] {
         let id = crate::artifact::save(&evidence).unwrap();
-        let error = crate::artifact::read(&json!({"id":id,"pointer":pointer}))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(pointer), "{error}");
-        assert!(error.contains(correct), "{error}");
+        let result = crate::artifact::read(&json!({"id":id,"pointer":pointer})).unwrap();
+        assert_eq!(result["found"], false, "{result}");
+        assert_eq!(result["pointer"], pointer);
+        assert_eq!(result["id"], id);
+        assert!(
+            result["available"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(correct)),
+            "{result}"
+        );
+        assert!(result["did_you_mean"].is_array(), "{result}");
+        if correct == "content" {
+            assert_eq!(result["did_you_mean"], json!(["/content"]));
+            let legacy =
+                crate::artifact::read(&json!({"id":id,"pointer":"/outcome/result"})).unwrap();
+            assert_eq!(legacy["found"], true);
+            assert_eq!(
+                serde_json::from_str::<Value>(legacy["data"].as_str().unwrap()).unwrap(),
+                evidence
+            );
+        }
+        let recovered =
+            crate::artifact::read(&json!({"id":id,"pointer":format!("/{correct}")})).unwrap();
+        assert_eq!(recovered["found"], true);
+        assert_eq!(
+            serde_json::from_str::<Value>(recovered["data"].as_str().unwrap()).unwrap(),
+            evidence[correct]
+        );
     }
 }
 

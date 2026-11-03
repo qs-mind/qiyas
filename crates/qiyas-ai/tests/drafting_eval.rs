@@ -418,7 +418,7 @@ async fn terminal_ground_floor_through_mizans_three_tools() {
     let room_reports: Vec<_> = eval
         .results
         .iter()
-        .filter(|v| v["outcome"]["data"].get("rooms").is_some())
+        .filter(|v| v["outcome"]["type"] == "rooms" && v.get("command").is_none())
         .collect();
     assert_eq!(room_reports.len(), 2);
     for report in &room_reports {
