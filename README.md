@@ -60,6 +60,5 @@ plans, check reports and the decisions carried forward.
 
 ## Contribute
 
-Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[code of conduct](CODE_OF_CONDUCT.md). Report security problems privately
-([SECURITY.md](SECURITY.md)). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+Issues and pull requests are welcome. Report security problems privately through GitHub's
+vulnerability reporting. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
