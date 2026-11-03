@@ -3392,6 +3392,29 @@ fn failed_text_filter_measure_list_and_decision_action_are_accepted() {
     )
     .unwrap();
     assert_eq!(result["total"], 2, "{result}");
+    // The office run searched marks with a regular expression.
+    let result = call(
+        &mut s,
+        READ,
+        json!({"op":"query","args":{"kind":"texts","pattern":"^(electrical|meeting)"}}),
+    )
+    .unwrap();
+    assert_eq!(result["total"], 2, "{result}");
+    assert!(call(
+        &mut s,
+        READ,
+        json!({"op":"query","args":{"kind":"texts","pattern":"("}})
+    )
+    .is_err());
+    // Broken JSON shows the text where it broke: here a point with no key.
+    let Err(ToolError::BadInput(why)) = call(
+        &mut s,
+        READ,
+        json!({"op":"query","args":"{\"kind\":\"texts\",\"bounds\":[[0,0]],[9,9]}"}),
+    ) else {
+        panic!("broken JSON must be refused")
+    };
+    assert!(why.contains("⟨here⟩") && why.contains("[[0,0]],"), "{why}");
     let mut handles = Vec::new();
     for length in [48, 32, 24, 16] {
         let out = s

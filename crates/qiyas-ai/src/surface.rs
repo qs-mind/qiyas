@@ -765,6 +765,28 @@ pub(crate) fn needs_sheet_authority(route: &Route) -> bool {
     }
 }
 
+/// The parser's words plus the text where it stopped, so the model sees its own slip
+/// (a missing key, say) instead of only a column number.
+pub fn json_error(text: &str, error: &serde_json::Error) -> String {
+    // serde_json counts the column in bytes.
+    let line = text
+        .lines()
+        .nth(error.line().saturating_sub(1))
+        .unwrap_or("");
+    let mut at = error.column().saturating_sub(1).min(line.len());
+    while !line.is_char_boundary(at) {
+        at -= 1;
+    }
+    let (head, tail) = line.split_at(at);
+    let before: String = {
+        let mut kept: Vec<char> = head.chars().rev().take(60).collect();
+        kept.reverse();
+        kept.into_iter().collect()
+    };
+    let after: String = tail.chars().take(30).collect();
+    format!("{error}; the text there: \"{before}⟨here⟩{after}\"")
+}
+
 /// The op's arguments: an object, a JSON object written as a string, or nothing.
 pub fn args_of(input: &Value) -> Result<Value, String> {
     match input.get("args") {
@@ -774,7 +796,7 @@ pub fn args_of(input: &Value) -> Result<Value, String> {
         Some(Value::String(text)) => match serde_json::from_str::<Value>(text) {
             Ok(Value::Object(map)) => Ok(Value::Object(map)),
             Ok(_) => Err("args must be a JSON object, e.g. \"{}\"".to_string()),
-            Err(e) => Err(format!("args is not valid JSON: {e}")),
+            Err(e) => Err(format!("args is not valid JSON: {}", json_error(text, &e))),
         },
         Some(_) => Err("args must be a JSON object written as a string".to_string()),
     }
@@ -1006,8 +1028,12 @@ fn validate(
         }
     } else if let Some(command) = args.get("command") {
         let command = match command {
-            Value::String(text) => serde_json::from_str(text)
-                .map_err(|e| bad(format!("command is not valid JSON: {e}")))?,
+            Value::String(text) => serde_json::from_str(text).map_err(|e| {
+                bad(format!(
+                    "command is not valid JSON: {}",
+                    json_error(text, &e)
+                ))
+            })?,
             other => other.clone(),
         };
         match session {
@@ -1787,6 +1813,14 @@ fn query(session: &Session, args: &Value) -> Result<ToolOutput, ToolError> {
                 let needle = needle.to_lowercase();
                 rows.retain(|row| row.text.to_lowercase().contains(&needle));
             }
+            if let Some(pattern) = args["pattern"].as_str() {
+                let pattern = regex::RegexBuilder::new(pattern)
+                    .case_insensitive(true)
+                    .size_limit(1 << 20)
+                    .build()
+                    .map_err(|e| bad(format!("pattern is not a regular expression: {e}")))?;
+                rows.retain(|row| pattern.is_match(&row.text));
+            }
             if let Some(layer) = args["layer"].as_str() {
                 rows.retain(|row| row.layer.eq_ignore_ascii_case(layer));
             }
@@ -2137,8 +2171,12 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
 /// Reads a command object before binding its fields. Its type and kind must be literal.
 fn command_value(raw: &Value) -> Result<Value, ToolError> {
     let value = match raw {
-        Value::String(text) => serde_json::from_str::<Value>(text)
-            .map_err(|e| bad(format!("command is not valid JSON: {e}")))?,
+        Value::String(text) => serde_json::from_str::<Value>(text).map_err(|e| {
+            bad(format!(
+                "command is not valid JSON: {}",
+                json_error(text, &e)
+            ))
+        })?,
         Value::Null => {
             return Err(bad(
                 "Give {\"command\": {\"type\": …}}; qiyas_read commands lists them",

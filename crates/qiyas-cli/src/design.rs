@@ -140,6 +140,9 @@ struct Trace {
     failure: Option<qiyas_ai::provider_error::PublicError>,
     final_answer: String,
     resolved_model: Option<String>,
+    /// The run used its whole request allowance: a normal stop, not a provider failure.
+    #[serde(skip)]
+    limit_reached: bool,
 }
 #[derive(Serialize)]
 struct Request {
@@ -208,6 +211,7 @@ impl Provider for Recorded {
                     .lock()
                     .map_err(|_| AiError::Stream("Trace lock failed".into()))?;
                 if trace.requests.len() >= self.max_requests as usize {
+                    trace.limit_reached = true;
                     return Err(AiError::Stream("Design request limit reached".into()));
                 }
                 let number = trace.requests.len() + 1;
@@ -412,8 +416,16 @@ async fn run_with_provider(run: Run) -> Result<Value, String> {
     let elapsed_ms = started.elapsed().as_millis();
     let mut trace = trace.lock().map_err(|_| "Trace lock failed")?;
     if let Err(error) = result {
-        trace.status = format!("failed: {error}");
-        trace.failure = Some(error.public_error_for(&run.settings.provider));
+        if trace.limit_reached {
+            trace.status = format!(
+                "stopped: request limit reached ({} of {} requests used)",
+                trace.requests.len(),
+                run.max_requests
+            );
+        } else {
+            trace.status = format!("failed: {error}");
+            trace.failure = Some(error.public_error_for(&run.settings.provider));
+        }
     }
     if trace.status.is_empty() {
         trace.status = "incomplete".into();

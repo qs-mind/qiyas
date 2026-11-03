@@ -205,8 +205,14 @@ impl Session {
                         .is_some_and(|info| info.effect == crate::registry::Effect::Edit)
             })
             .map(str::to_owned);
-        let Some(sheet) = targeted else {
-            return self.run_input_here(raw, source);
+        // An edit that names only entities of one other sheet runs there: a handle names one
+        // entity, so the sheet follows from it. Reported as a default.
+        let (sheet, inferred) = match targeted {
+            Some(sheet) => (sheet, None),
+            None => match self.inferred_edit_sheet(&input) {
+                Some((block, name)) => (block, Some(name)),
+                None => return self.run_input_here(raw, source),
+            },
         };
         // The read token describes the caller's context, before the temporary edit sheet.
         if let Some(expected) = input
@@ -236,10 +242,66 @@ impl Session {
         match result {
             Ok(result) => result.map(|mut report| {
                 report.revision = self.revision();
+                if let Some(name) = inferred {
+                    report.defaults_used.push(crate::validation::DefaultUsed {
+                        field: "/sheet".into(),
+                        value: json!(name),
+                        unit: None,
+                    });
+                }
                 report
             }),
             Err(panic) => std::panic::resume_unwind(panic),
         }
+    }
+
+    /// The one other sheet whose top-level entities an edit's `target`/`targets` all name, as
+    /// (backing block, sheet name). None when they are on the sheet on screen, on several
+    /// sheets, inside blocks, or not found: the command then reports as it always did.
+    fn inferred_edit_sheet(&self, input: &Value) -> Option<(String, String)> {
+        let name = input["type"].as_str()?;
+        if name == "batch"
+            || crate::registry::registry()
+                .get(name)
+                .is_none_or(|info| info.effect != crate::registry::Effect::Edit)
+        {
+            return None;
+        }
+        let mut picks: Vec<&Value> = Vec::new();
+        if input["target"].is_object() {
+            picks.push(&input["target"]);
+        }
+        if let Some(targets) = input["targets"].as_array() {
+            picks.extend(targets.iter());
+        }
+        if picks.is_empty() {
+            return None;
+        }
+        let doc = &self.drawing.doc;
+        let sheets = self.drawing.sheets();
+        let mut found: Option<&crate::drawing::Sheet> = None;
+        for pick in picks {
+            if pick["chain"]
+                .as_array()
+                .is_some_and(|chain| !chain.is_empty())
+            {
+                return None;
+            }
+            let entity = doc.get_entity(opencadcodec::Handle::new(pick["handle"].as_u64()?))?;
+            let owner = entity.common().owner_handle;
+            let sheet = sheets.iter().find(|sheet| {
+                doc.block_records
+                    .get(&sheet.block)
+                    .is_some_and(|block| block.handle == owner)
+            })?;
+            match found {
+                Some(seen) if !seen.block.eq_ignore_ascii_case(&sheet.block) => return None,
+                _ => found = Some(sheet),
+            }
+        }
+        let sheet = found?;
+        (!sheet.block.eq_ignore_ascii_case(&self.sheet) && (self.block_edit.is_none()))
+            .then(|| (sheet.block.clone(), sheet.name.clone()))
     }
 
     fn run_input_here(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {

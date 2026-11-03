@@ -315,6 +315,15 @@ schedules accept `text_height` in drawing units, with `height` as its alias. Dec
 nonempty arrays and objects as JSON. An omitted reason uses the entry or command description
 only for a nonempty answered/provisional value with source `mizan_design` and setter `mizan`,
 and reports that default; other sources still need a reason. Empty decisions remain refused.
+Office run 4 (3 November 2026): a decision without `set_by` is Mizan's (reported default);
+entity records accept `name` for `block_name`; text query `pattern` is a case-insensitive
+regular expression; generate loops may be named `x`, `y` or `angle` unless a loop runs `along`
+a path; `mview` corners with `model_bounds` take the window's middle as `centre` and, without a
+scale, the largest that shows it; an `mview` aimed at a layout's overall viewport changes its
+only model viewport (or makes one; several must be named); an edit whose targets are all on one
+other sheet runs there (reported `/sheet` default). Broken tool JSON is answered with the text
+where it broke; a miscopied artifact id that is part of exactly one saved id finds it. A design
+run that uses its request allowance reports `stopped: request limit reached`, not a failure.
 
 ## Session references
 

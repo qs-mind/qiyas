@@ -11,6 +11,10 @@ fn alias(value: &mut Value, from: &str, to: &str) {
 }
 
 pub(crate) fn records(query: &mut Value) {
+    // Entities have no `name`; the one an insert carries is its block's.
+    let entities = matches!(query.get("collection"), None | Some(Value::Null))
+        || query["collection"] == "entities";
+    let block_word = |path: &Value| path == "block" || (entities && path == "name");
     if query["where"].is_object() {
         query["where"] = json!([query["where"]]);
     }
@@ -32,17 +36,51 @@ pub(crate) fn records(query: &mut Value) {
                     }
                 }
             }
-            if condition["path"] == "block" {
+            if block_word(&condition["path"]) {
                 condition["path"] = json!("block_name");
             }
         }
     }
     if let Some(fields) = query.get_mut("fields").and_then(Value::as_array_mut) {
         for field in fields {
-            if field == "block" {
+            if block_word(field) {
                 *field = json!("block_name");
             }
         }
+    }
+}
+
+/// Paper corners together with a model window: the corners are the frame, the window's
+/// middle its centre and, with no scale given, the largest scale that shows the whole window.
+fn mview_mixed(value: &mut Value) {
+    let point = |v: &Value| Some([v.get(0)?.as_f64()?, v.get(1)?.as_f64()?]);
+    let (Some(c1), Some(c2), Some(b1), Some(b2)) = (
+        point(&value["corner1"]),
+        point(&value["corner2"]),
+        point(&value["model_bounds"][0]),
+        point(&value["model_bounds"][1]),
+    ) else {
+        return;
+    };
+    if !value["paper_centre"].is_null() && value.get("paper_centre").is_some() {
+        return;
+    }
+    if value.get("centre").is_none_or(Value::is_null) {
+        value["centre"] = json!([(b1[0] + b2[0]) / 2.0, (b1[1] + b2[1]) / 2.0]);
+    }
+    if value.get("scale").is_none_or(Value::is_null) {
+        let (mw, mh) = ((b2[0] - b1[0]).abs(), (b2[1] - b1[1]).abs());
+        let (pw, ph) = ((c2[0] - c1[0]).abs(), (c2[1] - c1[1]).abs());
+        let fit = match (mw > 0.0, mh > 0.0) {
+            (true, true) => (pw / mw).min(ph / mh),
+            (true, false) => pw / mw,
+            (false, true) => ph / mh,
+            (false, false) => return,
+        };
+        value["scale"] = json!(fit);
+    }
+    if let Some(map) = value.as_object_mut() {
+        map.remove("model_bounds");
     }
 }
 
@@ -77,11 +115,17 @@ pub(crate) fn normalize(value: &mut Value) {
             }
         }
         "opening_schedule" => alias(value, "height", "text_height"),
+        "mview" => mview_mixed(value),
         "decision" | "decision.set" if value["kind"] == "set" || name == "decision.set" => {
             let description = value
                 .as_object_mut()
                 .and_then(|map| map.remove("description"));
             fn reason(entry: &mut Value, description: Option<&Value>) {
+                // A decision that does not say who set it was set by the one writing it in
+                // a command, Mizan; the window names the engineer itself. Reported as a default.
+                if entry.is_object() && entry.get("set_by").is_none() {
+                    entry["set_by"] = json!("mizan");
+                }
                 let own_description = entry
                     .as_object_mut()
                     .and_then(|map| map.remove("description"));
@@ -240,6 +284,20 @@ pub(crate) fn normalize(value: &mut Value) {
 /// Only inferred values, not renamed fields, are defaults.
 pub(crate) fn defaults(raw: &Value, canonical: &Value, prefix: &str) -> Vec<DefaultUsed> {
     fn visit(a: &Value, b: &Value, path: &str, out: &mut Vec<DefaultUsed>) {
+        if a["type"] == "mview"
+            && a.get("model_bounds").is_some()
+            && b.get("model_bounds").is_none()
+        {
+            for field in ["centre", "scale"] {
+                if a.get(field).is_none_or(Value::is_null) && b.get(field).is_some() {
+                    out.push(DefaultUsed {
+                        field: format!("{path}/{field}"),
+                        value: b[field].clone(),
+                        unit: None,
+                    });
+                }
+            }
+        }
         if a["type"] == "set_layer" && b["type"] == "set_current" {
             out.push(DefaultUsed {
                 field: format!("{path}/current/color"),
@@ -266,6 +324,7 @@ pub(crate) fn defaults(raw: &Value, canonical: &Value, prefix: &str) -> Vec<Defa
                             | "cols"
                             | "op"
                             | "reason"
+                            | "set_by"
                     )
                     || (key == "rows" && a[key].is_array() && value.is_number())
                 {
@@ -297,7 +356,12 @@ pub(crate) fn schema(name: &str, schema: &mut Value) {
     }
     match name {
         "opening_schedule" => {
-            schema["properties"]["height"] = schema["properties"]["text_height"].clone();
+            // The alias has no default of its own: an omitted height reads as text_height's.
+            let mut alias = schema["properties"]["text_height"].clone();
+            if let Some(map) = alias.as_object_mut() {
+                map.remove("default");
+            }
+            schema["properties"]["height"] = alias;
         }
         "decision.set" | "decision.list" => {
             if name == "decision.set" {
@@ -310,6 +374,9 @@ pub(crate) fn schema(name: &str, schema: &mut Value) {
                             variant
                         };
                         entry["properties"]["description"] = json!({"type":"string"});
+                        optional(entry, &["set_by"]);
+                        entry["properties"]["set_by"]["description"] =
+                            json!("Who set it; omitted, mizan (reported as a default)");
                     }
                 }
             }

@@ -3332,6 +3332,10 @@ impl Session {
                         self.advise_viewport_fill(bounds, frame.scale, area);
                     }
                 }
+                let target = match target {
+                    Some(target) => self.model_viewport_target(target)?,
+                    None => None,
+                };
                 if let Some(target) = target {
                     self.resize_viewport(&target, frame)?;
                     let bounds =

@@ -559,6 +559,9 @@ fn natural_decision_and_records_filters_replay_failed_inputs() {
         json!({"path":"block","value":"Column700"}),
         json!({"block":"Column700"}),
         json!({"field":"block_name","value":"Column700"}),
+        // The office run filtered inserts by `name`.
+        json!({"path":"name","value":"Column700"}),
+        json!({"name":"Column700"}),
     ] {
         let out = s.run_input(&json!({"type":"records","query":{"collection":"entities","type":"Insert","where":[condition]}}), Source::Ai).unwrap();
         let Outcome::Records { page } = out.outcome else {
@@ -772,4 +775,25 @@ fn registry_schemas_describe_the_accepted_natural_forms() {
         );
         parse_command(input).unwrap();
     }
+}
+
+#[test]
+fn a_decision_without_set_by_is_mizans_and_says_so() {
+    let mut s = natural_input_session();
+    // The office run's room areas, as it sent them.
+    let out = s
+        .run_input(
+            &json!({"type":"decision","kind":"set","entries":[{"name":"net_room_areas","value":{"office":61.3638},
+                "unit":"m2","reason":"Net rooms between inside wall faces","source":"drawing",
+                "citation":"Measured floor boundaries in Model","status":"answered"}]}),
+            Source::Ai,
+        )
+        .unwrap();
+    assert!(
+        out.defaults_used
+            .iter()
+            .any(|d| d.field.ends_with("/set_by") && d.value == json!("mizan")),
+        "{:?}",
+        out.defaults_used
+    );
 }

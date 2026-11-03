@@ -214,7 +214,15 @@ async fn request_limit_keeps_partial_drawing_and_a_report() {
     let dir = tempfile::tempdir().unwrap();
     let report = scripted_run(&dir.path().join("run"), 1).await;
     assert_eq!(report["requests"], 1);
-    assert!(report["status"].as_str().unwrap().contains("request limit"));
+    let status = report["status"].as_str().unwrap();
+    assert!(
+        status.starts_with("stopped: request limit reached"),
+        "{status}"
+    );
+    assert!(
+        report["failure"].is_null(),
+        "a used-up allowance is no provider failure"
+    );
     assert!(dir.path().join("run/drawing.dwg").is_file());
     assert!(dir.path().join("run/model.png").is_file());
     assert_eq!(report["tokens"]["input"]["max"], 100);

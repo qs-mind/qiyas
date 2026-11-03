@@ -93,8 +93,8 @@ pub(crate) fn entity_rule(kind: &str, path: &str) -> Rule {
     }
     if under("/common/extended_data") {
         return Rule::Refuse {
-            why: "extended data holds Qiyas's own marks (reading order, fields, constraints, comments)",
-            via: None,
+            why: "extended data holds Qiyas's own marks (reading order, fields, constraints, comments, viewport fits)",
+            via: Some("set_knowledge {kind:\"sheets\", name, data} to keep your own data for a sheet"),
         };
     }
     match kind {

@@ -318,16 +318,15 @@ fn decision_array_errors_name_missing_fields_instead_of_requesting_an_object() {
     }]});
     let report = qiyas_core::validation::validate_command(&command, None);
     assert!(!report.valid);
-    for field in ["unit", "set_by"] {
-        assert!(
-            report
-                .errors
-                .iter()
-                .any(|e| e.pointer == format!("/entries/0/{field}") && e.code == "missing_field"),
-            "{}",
-            report.message()
-        );
-    }
+    // An omitted set_by is Mizan's (a reported default); unit is still needed.
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.pointer == "/entries/0/unit" && e.code == "missing_field"),
+        "{}",
+        report.message()
+    );
     assert!(
         !report
             .errors

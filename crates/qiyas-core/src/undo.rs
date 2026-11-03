@@ -552,14 +552,17 @@ impl Step {
                     parts.handles,
                 ))
             }
-            // Each step in the order held; what redoes them goes the other way round.
+            // Each step in the order held; what redoes them goes the other way round. The
+            // group's own view change goes first: it puts back a state only while the state
+            // is still the one the group left, which its inner steps would already have moved
+            // (a batch's set_layer steps once left the current layer at the first one's).
             Step::Group(steps, view) => {
+                let view = view.map(|delta| Box::new(delta.undo(&mut parts.view)));
                 let mut back: Vec<Step> = steps
                     .into_iter()
                     .map(|step| step.swap(parts.reborrow()))
                     .collect();
                 back.reverse();
-                let view = view.map(|delta| Box::new(delta.undo(&mut parts.view)));
                 Step::Group(back, view)
             }
         }

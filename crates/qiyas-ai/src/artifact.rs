@@ -97,17 +97,55 @@ pub(crate) fn read(args: &Value) -> Result<Value, ToolError> {
     read_in(&folder()?, args)
 }
 
-fn read_in(folder: &Path, args: &Value) -> Result<Value, ToolError> {
-    let id = args["id"].as_str().unwrap_or_default();
-    if id.len() != 64
-        || !id
-            .bytes()
+/// An id is 64 lowercase hex digits. A miscopied one that is part of exactly one saved id
+/// (at least 16 digits) still finds it; otherwise the answer says what was wrong.
+fn full_id(folder: &Path, given: &str) -> Result<String, ToolError> {
+    let hex = |s: &str| {
+        s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+    };
+    if given.is_empty() || !hex(given) {
         return Err(ToolError::BadInput(
-            "Use the artifact id from a result.".into(),
+            "Give the artifact id (64 hex digits) as \"id\", copied whole from a result's \"artifact\" field.".into(),
         ));
     }
+    if given.len() == 64 && folder.join(format!("{given}.json")).exists() {
+        return Ok(given.to_owned());
+    }
+    let mut found = Vec::new();
+    if given.len() >= 16 {
+        if let Ok(entries) = std::fs::read_dir(folder) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".json")) else {
+                    continue;
+                };
+                if stem.len() == 64 && hex(stem) && stem.contains(given) {
+                    found.push(stem.to_owned());
+                }
+            }
+        }
+    }
+    match found.len() {
+        1 => Ok(found.remove(0)),
+        0 if given.len() == 64 => Ok(given.to_owned()),
+        0 => Err(ToolError::BadInput(format!(
+            "No artifact has id {given}: it has {} hex digits, an id has 64. Copy it whole from a result's \"artifact\" field.",
+            given.len()
+        ))),
+        n => Err(ToolError::BadInput(format!(
+            "{n} artifacts contain {given}; give the whole 64-digit id."
+        ))),
+    }
+}
+
+fn read_in(folder: &Path, args: &Value) -> Result<Value, ToolError> {
+    let given = args["id"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let id = full_id(folder, &given)?;
     let path = folder.join(format!("{id}.json"));
     if std::fs::symlink_metadata(&path)
         .map_err(failed)?
@@ -155,7 +193,7 @@ fn read_in(folder: &Path, args: &Value) -> Result<Value, ToolError> {
             return Ok(out);
         };
         let part = part.to_string();
-        let mut out = page(&part, offset, id, metadata["revision"].clone())?;
+        let mut out = page(&part, offset, &id, metadata["revision"].clone())?;
         out["pointer"] = json!(pointer);
         out["resolved_pointer"] = json!(resolved.path);
         out["found"] = json!(true);
@@ -379,6 +417,24 @@ fn page(text: &str, offset: u64, id: &str, revision: Value) -> Result<Value, Too
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_miscopied_id_finds_its_one_artifact_or_says_what_is_wrong() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = save_in(dir.path(), &json!({"office":"A-101"})).unwrap();
+        // The office run copied 56 of the 64 digits.
+        let short = &id[4..60];
+        let read = read_in(dir.path(), &json!({"id":short,"pointer":"/office"})).unwrap();
+        assert_eq!(read["found"], true, "{read}");
+        assert!(read["data"].as_str().unwrap().contains("A-101"), "{read}");
+        let ToolError::BadInput(why) =
+            read_in(dir.path(), &json!({"id":"5e169b5d7b488b19"})).unwrap_err()
+        else {
+            panic!("bad input expected")
+        };
+        assert!(why.contains("16 hex digits") && why.contains("64"), "{why}");
+        assert!(read_in(dir.path(), &json!({"pointer":"/"})).is_err());
+    }
 
     #[test]
     fn missing_pointers_are_soft_and_show_deepest_keys_and_suggestions() {

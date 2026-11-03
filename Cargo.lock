@@ -5035,6 +5035,7 @@ dependencies = [
  "qiyas-pdf",
  "qiyas-plot",
  "qiyas-render",
+ "regex",
  "reqwest",
  "ring",
  "rmcp",

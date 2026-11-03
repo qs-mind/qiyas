@@ -551,6 +551,56 @@ impl Session {
         Ok(added[0])
     }
 
+    /// The viewport an `mview` target means. The layout's overall viewport (number 1) is the
+    /// sheet itself, never resized: a sheet with one model viewport means that one, a sheet
+    /// with none gets a new one (`None`), and several must be named.
+    pub(crate) fn model_viewport_target(
+        &mut self,
+        target: Target,
+    ) -> Result<Option<Target>, CoreError> {
+        let handle = Handle::new(target.handle);
+        let mut overall = false;
+        let mut models = Vec::new();
+        for entity in self.drawing.doc.entities_in_block(&self.sheet) {
+            if let EntityType::Viewport(view) = entity {
+                if view.common.handle == handle && view.id == 1 {
+                    overall = true;
+                } else if view.id != 1 {
+                    models.push(view.common.handle.value());
+                }
+            }
+        }
+        if !overall || !target.chain.is_empty() {
+            return Ok(Some(target));
+        }
+        match models.as_slice() {
+            [one] => {
+                self.last_advice.push(serde_json::json!({
+                    "code":"overall_viewport_redirected", "from":target.handle, "to":one,
+                    "message":format!("Viewport {} is the layout's overall viewport; its model viewport {one} was changed instead.", target.handle),
+                    "message_ar":format!("نافذة العرض {} هي النافذة الكلية للوحة؛ عُدلت نافذة العرض {one} بدلًا منها.", target.handle)
+                }));
+                Ok(Some(Target {
+                    handle: *one,
+                    chain: Vec::new(),
+                }))
+            }
+            [] => {
+                self.last_advice.push(serde_json::json!({
+                    "code":"overall_viewport_redirected", "from":target.handle,
+                    "message":format!("Viewport {} is the layout's overall viewport and the layout had no model viewport; a new one was made.", target.handle),
+                    "message_ar":format!("نافذة العرض {} هي النافذة الكلية للوحة ولا توجد نافذة عرض للنموذج؛ أُنشئت نافذة جديدة.", target.handle)
+                }));
+                Ok(None)
+            }
+            many => Err(invalid(format!(
+                "Viewport {} is the layout's overall viewport, which cannot be resized; target one of its model viewports: {}",
+                target.handle,
+                many.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")
+            ))),
+        }
+    }
+
     /// Resize the same viewport, preserving identity, frozen layers and its other settings.
     pub(crate) fn resize_viewport(
         &mut self,

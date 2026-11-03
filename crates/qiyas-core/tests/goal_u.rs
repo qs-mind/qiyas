@@ -370,14 +370,18 @@ fn u15_edit_an_explicit_sheet_without_switching_the_view() {
         &mut s,
         json!({"type":"text","at":[10,10],"value":"Sheet text"}),
     );
-    let err = s
+    // Without `sheet`, the handle's own sheet is used and reported; the view stays.
+    let out = s
         .run_input(
             &json!({"type":"edit_text","target":{"handle":model},"value":"Changed"}),
             Source::Ai,
         )
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("Model") && err.contains("sheet"), "{err}");
+        .unwrap();
+    assert!(out
+        .defaults_used
+        .iter()
+        .any(|d| d.field == "/sheet" && d.value == json!("Model")));
+    assert_eq!(s.sheet, sheet);
     run(
         &mut s,
         json!({"type":"edit_text","target":{"handle":model},"value":"Changed model","sheet":"Model"}),

@@ -757,12 +757,16 @@ impl Session {
             .map_err(|e| invalid(e.to_string()))?
             .len();
         self.recipe_budget.check()?;
-        let mut names = BTreeSet::from(["unit".to_owned(), "x".into(), "y".into(), "angle".into()]);
+        // x, y and angle name an `along` station; without one they are ordinary names.
+        let mut names = BTreeSet::from(["unit".to_owned()]);
+        if recipe.loops.iter().any(|item| item.along.is_some()) {
+            names.extend(["x".to_owned(), "y".into(), "angle".into()]);
+        }
         for (index, item) in recipe.loops.iter().enumerate() {
             if !qiyas_param::expr::is_name(&item.var) || !names.insert(item.var.clone()) {
                 return Err(at(
                     &format!("{path}/loops/{index}/var"),
-                    "Use a unique, nonreserved variable name",
+                    "Use a unique variable name other than unit (x, y and angle are taken when a loop runs along a path)",
                 ));
             }
         }
@@ -771,7 +775,7 @@ impl Session {
             if !qiyas_param::expr::is_name(name) || !names.insert(name.clone()) {
                 return Err(at(
                     &format!("{path}/vars/{name}"),
-                    "Use a unique, nonreserved variable name",
+                    "Use a unique variable name other than unit (x, y and angle are taken when a loop runs along a path)",
                 ));
             }
             let text = match scalar {

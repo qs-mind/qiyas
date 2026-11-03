@@ -71,7 +71,7 @@ fn tables_dimensions_grid_and_text_edges_are_checked_in_every_unit() {
     }
 }
 #[test]
-fn room_labels_fit_or_wrap_and_unknown_rules_are_errors() {
+fn room_labels_fit_or_wrap_and_unknown_rules_are_skipped() {
     for units in [4, 5, 6, 1] {
         for language in ["en", "ar"] {
             let mut s = blank(units);
@@ -102,12 +102,18 @@ fn room_labels_fit_or_wrap_and_unknown_rules_are_errors() {
                 json!({"type":"modify","kind":"move","targets":[{"handle":h}],"delta":[3.0*k,0]}),
             );
             assert!(has(&s, "label_outside_room", h));
-            assert!(s
+            // An unknown rule is skipped with a warning naming the nearest rule.
+            let checked = s
                 .run_input(
                     &json!({"type":"check_drawing","scope":{"rules":["outside_room"]}}),
-                    Source::User
+                    Source::User,
                 )
-                .is_err());
+                .unwrap();
+            assert!(
+                format!("{:?}", checked.warnings).contains("label_outside_room"),
+                "{:?}",
+                checked.warnings
+            );
         }
     }
 }

@@ -280,6 +280,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
                         }
                         "texts" => {
                             props["contains"] = json!({"type":"string","description":"Case-insensitive text filter, before paging"});
+                            props["pattern"] = json!({"type":"string","description":"Case-insensitive regular expression (e.g. \"^(D|W)0\\d\"), before paging"});
                             props["layer"] = nullable(&string);
                             props["bounds"] = nullable(&bounds);
                             props["sheet"] = nullable(&string);
@@ -442,6 +443,7 @@ mod tests {
             json!({"kind":"layers","offset":0,"limit":20}),
             json!({"kind":"texts","limit":20}),
             json!({"kind":"texts","contains":"Room"}),
+            json!({"kind":"texts","pattern":"D0|W0"}),
         ] {
             assert!(validate(READ, "query", &args).is_ok(), "{args}");
         }
