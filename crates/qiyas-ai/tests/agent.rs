@@ -1300,9 +1300,10 @@ async fn view_image_stops_when_the_image_budget_is_used() {
         let one = {
             let mut guard = probe.lock().unwrap();
             let s = guard.as_mut().unwrap();
-            match qiyas_ai::execute(
+            match qiyas_ai::surface::run_session(
                 s,
-                "view_image",
+                qiyas_ai::surface::CAPTURE,
+                "picture",
                 &json!({ "width": 64 }),
                 qiyas_core::Source::Ai,
             )

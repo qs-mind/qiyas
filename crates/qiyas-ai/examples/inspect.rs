@@ -1,11 +1,10 @@
-//! `cargo run -p qiyas-ai --example inspect -- <drawing> [tool[={json}] …]`: runs read-only Mizan tools on a
-//! drawing and prints their JSON (default: list_sheets, list_layers, read_dimensions, read_text,
-//! block_summary; a picture tool writes `<drawing>.<tool>.png`). For looking into a drawing a user
-//! reports problems with.
+//! Inspect a drawing through qiyas_read, or capture a picture.
+//! Usage: inspect <drawing> [op={args} ...]. Defaults to state and drawing queries.
+//! A picture writes <drawing>.picture.png.
 
 use std::path::Path;
 
-use qiyas_ai::{execute, ToolOutput};
+use qiyas_ai::{surface, ToolOutput};
 use qiyas_core::{Session, Source};
 use serde_json::json;
 
@@ -18,11 +17,11 @@ fn main() {
     let mut tools: Vec<String> = args.collect();
     if tools.is_empty() {
         tools = [
-            "list_sheets",
-            "list_layers",
-            "read_dimensions",
-            "read_text",
-            "block_summary",
+            "state",
+            r#"query={"kind":"layers"}"#,
+            r#"query={"kind":"dimensions"}"#,
+            r#"query={"kind":"texts"}"#,
+            r#"query={"kind":"blocks"}"#,
         ]
         .map(String::from)
         .to_vec();
@@ -49,7 +48,12 @@ fn main() {
             ),
             None => (spec.clone(), json!({})),
         };
-        match execute(&mut session, &tool, &input, Source::User) {
+        let name = if tool == "picture" {
+            surface::CAPTURE
+        } else {
+            surface::READ
+        };
+        match surface::run_session(&mut session, name, &tool, &input, Source::User) {
             Ok(ToolOutput::Json(v)) => {
                 println!("== {tool}\n{}", serde_json::to_string(&v).unwrap())
             }

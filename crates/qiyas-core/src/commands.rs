@@ -2538,6 +2538,7 @@ impl Session {
                 if points.len() < 2 {
                     return Err(invalid("A distance needs at least 2 points"));
                 }
+                self.advise_traced_measurement(&points, source);
                 let path = Path {
                     points: points.into(),
                     closed: false,
@@ -2551,6 +2552,7 @@ impl Session {
                 if points.len() < 3 {
                     return Err(invalid("An area needs at least 3 points"));
                 }
+                self.advise_traced_measurement(&points, source);
                 let ring = Path {
                     points: points.into(),
                     closed: true,
@@ -2568,17 +2570,37 @@ impl Session {
                 m
             }
             Command::CountBlock { block_name, layer } => {
+                if matches!(source, Source::Ai | Source::Mcp) {
+                    let known = std::iter::once(&self.drawing.doc)
+                        .chain(
+                            self.xrefs
+                                .entries
+                                .iter()
+                                .filter_map(|xref| Some(&xref.drawing.as_ref()?.doc)),
+                        )
+                        .any(|doc| doc.block_records.get(&block_name).is_some());
+                    if !known {
+                        return Err(invalid(&format!(
+                            "No block named {block_name}; read block records for the current names"
+                        )));
+                    }
+                    if let Some(layer) = &layer {
+                        self.require_layer(layer)?;
+                    }
+                }
                 let mut m = self.count_block(block_name, layer)?;
                 m.auto_description = true;
                 m
             }
             Command::RemoveMeasurement { id } => {
+                self.require_measurement(&id, source)?;
                 return Ok(match self.takeoff.remove(&id) {
                     Some(_) => Outcome::Removed { id },
                     None => Outcome::Nothing,
                 });
             }
             Command::SetDescription { id, text } => {
+                self.require_measurement(&id, source)?;
                 if self
                     .takeoff
                     .items
@@ -2597,6 +2619,9 @@ impl Session {
                 });
             }
             Command::SetLayerHidden { name, hidden } => {
+                if matches!(source, Source::Ai | Source::Mcp) {
+                    self.require_layer(&name)?;
+                }
                 self.set_layer_hidden(&name, hidden);
                 return Ok(Outcome::Changed);
             }
@@ -2674,6 +2699,7 @@ impl Session {
                 m
             }
             Command::SetHeight { id, height } => {
+                self.require_measurement(&id, source)?;
                 check_height(height)?;
                 let units = self.drawing.units;
                 return self.edit(&id, |m| {
@@ -2693,6 +2719,7 @@ impl Session {
                 });
             }
             Command::LinkBoq { id, code } => {
+                self.require_measurement(&id, source)?;
                 return self.edit(&id, |m| {
                     m.boq_code = code;
                     Ok(())
@@ -3553,6 +3580,14 @@ impl Session {
         if !chain.is_empty() && handles.is_empty() {
             return Err(invalid("A chain goes with handles"));
         }
+        if matches!(source, Source::Ai | Source::Mcp) {
+            let mut seen = std::collections::HashSet::new();
+            for handle in &handles {
+                if !seen.insert(handle) {
+                    return Err(invalid(&format!("Handle {handle} is given twice")));
+                }
+            }
+        }
         let xrefs = self.xref_docs();
         let entities = handles
             .iter()
@@ -3692,6 +3727,65 @@ impl Session {
         m.xref = located.xref;
         m.chain = chain;
         Ok(m)
+    }
+
+    fn require_measurement(&self, id: &str, source: Source) -> Result<(), CoreError> {
+        if matches!(source, Source::Ai | Source::Mcp) && self.takeoff.get(id).is_none() {
+            Err(invalid(&format!(
+                "No measurement with id {id}; read take-off records for the current ids"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn require_layer(&self, name: &str) -> Result<(), CoreError> {
+        if self.drawing.doc.layers.get(name).is_some()
+            || self
+                .layers()
+                .iter()
+                .any(|layer| layer.name.eq_ignore_ascii_case(name))
+        {
+            Ok(())
+        } else {
+            Err(invalid(&format!(
+                "No layer named {name}; read layers for the current names"
+            )))
+        }
+    }
+
+    fn advise_traced_measurement(&mut self, points: &[[f64; 2]], source: Source) {
+        if !matches!(source, Source::Ai | Source::Mcp) || points.is_empty() {
+            return;
+        }
+        let [lo, hi] = points.iter().fold([points[0], points[0]], |[lo, hi], p| {
+            [
+                [lo[0].min(p[0]), lo[1].min(p[1])],
+                [hi[0].max(p[0]), hi[1].max(p[1])],
+            ]
+        });
+        let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+        if !extent.is_finite() || extent <= 0.0 {
+            return;
+        }
+        let tolerance = extent * 0.1;
+        let candidates: Vec<_> = self.find_entities(&EntityFilter {
+            within: Some([[lo[0] - tolerance, lo[1] - tolerance], [hi[0] + tolerance, hi[1] + tolerance]]),
+            limit: 500,
+            ..Default::default()
+        }).rows.into_iter()
+            .filter(|row| matches!(row.kind.as_str(), "Line" | "Arc" | "Circle" | "Ellipse" | "Spline" | "LwPolyline" | "Polyline" | "Polyline2D" | "Polyline3D" | "Hatch"))
+            .filter(|row| {
+                let [a, b] = row.bounds;
+                [a[0]-lo[0], a[1]-lo[1], b[0]-hi[0], b[1]-hi[1]].iter().all(|d| d.abs() <= tolerance)
+            })
+            .take(5)
+            .map(|row| json!({"handle":row.handle,"kind":row.kind,"layer":row.layer,"length":row.length,"area":row.area}))
+            .collect();
+        if !candidates.is_empty() {
+            self.last_advice.push(json!({"code":"traced_geometry", "candidates":candidates,
+                "message":"These points follow a drawn element and only approximate its shape. Measure the intended handle for its exact geometry; if several could be meant, ask which one."}));
+        }
     }
 
     /// Counts top-level references only: a block nested inside another block is not counted yet.

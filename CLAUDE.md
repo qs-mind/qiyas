@@ -2275,8 +2275,16 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   tools: `qiyas_read { op, args }`, `qiyas_execute { op, args }` and
   `qiyas_capture { source, args }`. `args` is a JSON object written as a string (an object is
   accepted too). Their schemas are strict and closed for Claude and Gemini; every property is
-  required, with no open objects or references. The old tool names in `execute.rs`, `window.rs`
-  and `host.rs` are private runners, never offered to a model.
+  required, with no open objects or references. Registry commands use `Session::run_input`
+  directly; there is no named-command executor. Read queries use the session's inquiry APIs
+  through `surface.rs` and `surface_io.rs`; `capture.rs` renders pictures. `tool_output.rs`
+  holds the shared output and error types. Window and host operations retain their own runners.
+  BOQ import, comparison, sheet changes, drawing checks and room queries use `run_input` too,
+  retaining their existing result fields with `Reported` metadata beside them. Saved tool
+  envelopes and the window's old-transcript rendering remain compatible.
+  Automation guards for missing measurement ids, block/layer names and duplicate measurement
+  handles live in the core. Point measurements that approximate drawn geometry report
+  `traced_geometry` advice with candidate handles, including inside generic batches.
 - Read operations: state, capabilities, commands (no args: the registry index; `name`: schema
   and examples; `search`: matching commands), validate, records, record_schema, query, measure (numbers
   only), run (read-only commands), check, history, drawings, selection and rooms. Execute
@@ -2383,7 +2391,7 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   stays under 900 words (a test, excluding the index), in `prompt_en.txt` and `prompt_ar.txt`.
   Both languages append the registry's deterministic `index_text()` under "Commands by category",
   then the drawing facts. The stable index keeps prompt caching working.
-- Mizan's eyes (`qiyas-ai/src/image.rs`, `marks.rs`, `execute.rs` `picture`): `qiyas_capture` source picture draws a
+- Mizan's eyes (`qiyas-ai/src/image.rs`, `marks.rs`, `capture.rs` `picture`): `qiyas_capture` source picture draws a
   sheet (`sheet`, by layout or block name; the one on screen by default; it never moves the
   user's view) as the engineer sees it on white: model space inside a layout's viewports
   (`Session::picture_batch_of`, `paper_views_against`, clipped to each frame), pictures and PDF
@@ -3518,7 +3526,8 @@ New untitled drawings skip placeholder names already present in chat history or 
   SHA-256 of canonical JSON. `qiyas_read artifact {id, offset}` returns at most 12,000 UTF-8
   bytes with `next_offset`, `artifact_revision`, historical `revision` and `current_revision`.
   An old artifact never acquires permission to edit a newer drawing. Exact quantities are
-  preserved before display rounding; legacy private tool display behavior remains unchanged.
+  preserved in generic results and their artifacts. The removed named tools' six-decimal
+  formatting is not applied to registry outcomes; existing filtered-query page formatting stays.
   Artifacts currently persist; there is no automatic expiry that could break a conversation.
 - Discovery contracts carry a content version and full-evidence pointer. A repeat supplies a
   reference in the new reply. Command families link qualified names such as `draw.line`;

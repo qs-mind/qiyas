@@ -16,6 +16,7 @@ pub mod agent;
 pub mod anthropic;
 mod artifact;
 pub mod blind_reader;
+mod capture;
 pub mod chatgpt_plan;
 pub mod claude_code;
 mod command_contract;
@@ -23,7 +24,6 @@ pub mod context;
 pub mod conversation;
 mod dashes;
 pub mod errors;
-mod execute;
 pub mod host;
 mod image;
 pub mod log;
@@ -38,13 +38,14 @@ pub mod provider;
 mod result;
 mod revision;
 pub mod surface;
+mod surface_io;
+mod tool_output;
 mod tools;
 pub mod window;
 
 pub use agent::{Agent, AgentEvent, AgentSettings, Autonomy, MeasurementMethod};
 pub use context::{Region, RegionKind, TurnContext, UserImage, UserMessage};
 pub use conversation::{Conversation, TranscriptEntry};
-pub use execute::{execute, ToolError, ToolOutput};
 pub use host::{is_host_tool, run_host, DrawingHost, Screen};
 pub use image::{render_png, render_png_with_text};
 pub use log::AgentLog;
@@ -53,6 +54,7 @@ pub use provider::{
     StreamEvent, TurnRequest, TurnResult, Usage,
 };
 pub use surface::tools as catalogue;
+pub use tool_output::{ToolError, ToolOutput};
 pub use tools::ToolSpec;
 pub use window::{is_window_tool, run_window};
 

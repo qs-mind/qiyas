@@ -1,8 +1,8 @@
 //! Argument contracts for every operation, checked by the core's shared schema validator.
 use serde_json::{json, Value};
 
-use crate::execute::ToolError;
 use crate::surface::{self, CAPTURE, EXECUTE, READ};
+use crate::ToolError;
 
 fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object", "properties":properties, "required":required, "additionalProperties":false})

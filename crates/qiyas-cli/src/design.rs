@@ -652,13 +652,25 @@ fn drawing_metrics(
         if count == 0 {
             args["bounds"] = json!([[0, 0], [1, 1]]);
         }
-        let mut render = qiyas_ai::execute(session, "view_image", &args, Source::Ai);
+        let mut render = qiyas_ai::surface::run_session(
+            session,
+            qiyas_ai::surface::CAPTURE,
+            "picture",
+            &args,
+            Source::Ai,
+        );
         if render
             .as_ref()
             .is_err_and(|error| error.to_string() == "Nothing is drawn on that sheet")
         {
             args["bounds"] = json!([[0, 0], [1, 1]]);
-            render = qiyas_ai::execute(session, "view_image", &args, Source::Ai);
+            render = qiyas_ai::surface::run_session(
+                session,
+                qiyas_ai::surface::CAPTURE,
+                "picture",
+                &args,
+                Source::Ai,
+            );
         }
         let mut caption = String::new();
         match render {

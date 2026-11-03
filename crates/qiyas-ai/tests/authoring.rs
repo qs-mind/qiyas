@@ -1,12 +1,12 @@
 //! The tools that write into the drawing (text, room areas and labels, tables, shapes, blocks),
 //! data-defined element types, the measure-by-handle rule and advice about unmeasured rows. Run through the
-//! generic surface as the model calls it. Curve-hint tests also cover the internal executor.
+//! generic surface as the model calls it.
 
 use std::f64::consts::PI;
 
 use opencadcodec::entities::{Polyline2D, Vertex2D};
 use opencadcodec::{Arc, CadDocument, EntityType, LwPolyline, Vector2, Vector3};
-use qiyas_ai::{execute, surface, ToolError, ToolOutput};
+use qiyas_ai::{surface, ToolError, ToolOutput};
 use qiyas_core::fixtures::{sample_doc, write_drawing};
 use qiyas_core::{Command, EntityFilter, Session, Source};
 use serde_json::{json, Value};
@@ -16,13 +16,6 @@ fn open(doc: &CadDocument, name: &str) -> (tempfile::TempDir, Session) {
     let path = write_drawing(doc, &dir.path().join(name));
     let session = Session::open(&path).unwrap();
     (dir, session)
-}
-
-fn internal(session: &mut Session, name: &str, input: Value) -> Result<Value, ToolError> {
-    match execute(session, name, &input, Source::Ai)? {
-        ToolOutput::Json(v) => Ok(v),
-        ToolOutput::Image { .. } => panic!("expected JSON"),
-    }
 }
 
 fn call(session: &mut Session, tool: &str, op: &str, args: Value) -> Result<Value, ToolError> {
@@ -589,13 +582,13 @@ fn measure_by_handle_gives_the_true_length_of_arcs_and_bulges() {
     for ext in ["dxf", "dwg"] {
         let (_dir, mut s) = open(&curves(), &format!("curves.{ext}"));
         let length = |s: &mut Session, handle: u64| -> f64 {
-            internal(s, "measure_length", json!({ "handle": handle })).unwrap()["measurement"]
+            command(s, json!({"type":"add_measurement","kind":"length","description":"Curve", "handles":[handle ]})).unwrap()["outcome"]["measurement"]
                 ["shown"]
                 .as_f64()
                 .unwrap()
         };
         let area = |s: &mut Session, handle: u64| -> f64 {
-            internal(s, "measure_area", json!({ "handle": handle })).unwrap()["measurement"]
+            command(s, json!({"type":"add_measurement","kind":"area","description":"Curve", "handles":[handle ]})).unwrap()["outcome"]["measurement"]
                 ["shown"]
                 .as_f64()
                 .unwrap()
@@ -652,30 +645,57 @@ fn points_that_trace_one_drawn_entity_get_a_hint_to_measure_it_by_handle() {
             [2.0 * a.cos(), 2.0 * a.sin()]
         })
         .collect();
-    let out = internal(&mut s, "measure_length", json!({ "points": clicks })).unwrap();
-    assert!(out["hint"].as_str().unwrap().contains("handle"), "{out}");
-    let candidates = out["candidates"].as_array().unwrap();
+    let out = command(
+        &mut s,
+        json!({"type":"measure_distance", "points": clicks }),
+    )
+    .unwrap();
+    let advice = out["advice"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["code"] == "traced_geometry")
+        .unwrap();
+    assert!(
+        advice["message"].as_str().unwrap().contains("handle"),
+        "{out}"
+    );
+    let candidates = advice["candidates"].as_array().unwrap();
     assert!(
         candidates.iter().any(|c| c["handle"] == json!(arc)),
         "{out}"
     );
     assert!(
-        out["measurement"]["shown"].as_f64().unwrap() < 2.0 * PI,
+        out["outcome"]["measurement"]["shown"].as_f64().unwrap() < 2.0 * PI,
         "{out}"
     );
 
     // By handle there is nothing to say; points between places the user gave have no hint.
-    let exact = internal(&mut s, "measure_length", json!({ "handle": arc })).unwrap();
-    assert!(exact.get("hint").is_none());
-    let free = internal(
+    let exact = command(
         &mut s,
-        "measure_length",
-        json!({ "points": [[100, 100], [103, 104]] }),
+        json!({"type":"add_measurement","kind":"length","description":"Curve", "handles":[arc ]}),
     )
     .unwrap();
-    assert!(free.get("hint").is_none(), "{free}");
+    assert!(!exact["advice"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["code"] == "traced_geometry"));
+    let free = command(
+        &mut s,
+        json!({"type":"measure_distance", "points": [[100, 100], [103, 104]] }),
+    )
+    .unwrap();
+    assert!(
+        !free["advice"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["code"] == "traced_geometry"),
+        "{free}"
+    );
     assert!(near(
-        free["measurement"]["shown"].as_f64().unwrap(),
+        free["outcome"]["measurement"]["shown"].as_f64().unwrap(),
         5.0,
         1e-9
     ));
@@ -686,10 +706,9 @@ fn points_that_trace_one_drawn_entity_get_a_hint_to_measure_it_by_handle() {
 #[test]
 fn unmeasured_takeoff_rows_advise_and_still_require_units() {
     let (_dir, mut s) = open(&sample_doc(), "rows.dxf");
-    let err = internal(
+    let err = command(
         &mut s,
-        "add_measurement",
-        json!({"kind":"item","description":"Overall Width: 12.00 m"}),
+        json!({"type":"add_measurement","kind":"item","description":"Overall Width: 12.00 m"}),
     )
     .unwrap_err();
     assert!(err.to_string().contains("needs a unit"));
@@ -710,26 +729,17 @@ fn unmeasured_takeoff_rows_advise_and_still_require_units() {
     }
 
     // A real quantity, geometry, or an explicit empty item goes in.
-    internal(
-        &mut s,
-        "add_measurement",
-        json!({ "kind": "item", "description": "Cement", "value": 5, "unit": "bags" }),
-    )
+    command(&mut s, json!({"type":"add_measurement", "kind": "item", "description": "Cement", "value": 5, "unit": "bags" }))
     .unwrap();
     let wall = handles_of(&s, "Line")[0];
-    internal(
-        &mut s,
-        "add_measurement",
-        json!({ "kind": "length", "description": "Wall", "handles": [wall] }),
-    )
+    command(&mut s, json!({"type":"add_measurement", "kind": "length", "description": "Wall", "handles": [wall] }))
     .unwrap();
-    internal(&mut s, "add_measurement", json!({ "kind": "item", "description": "Provisional sum", "unit": "ls", "empty_item": true })).unwrap();
+    command(&mut s, json!({"type":"add_measurement", "kind": "item", "description": "Provisional sum", "unit": "ls", "empty_item": true })).unwrap();
     assert_eq!(s.takeoff.items.len(), 5);
     // add_markup still makes its own quantity-less row: it is not a take-off quantity.
-    internal(
+    command(
         &mut s,
-        "add_markup",
-        json!({ "points": [[0, 0]], "text": "look here", "kind": "note" }),
+        json!({"type":"add_markup", "points": [[0, 0]], "text": "look here", "kind": "note" }),
     )
     .unwrap();
     assert_eq!(s.takeoff.items.len(), 6);

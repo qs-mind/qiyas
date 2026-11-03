@@ -1,5 +1,5 @@
 //! Documents are untrusted source material. These reads never acquire or mutate a drawing.
-use crate::execute::{ToolError, ToolOutput};
+use crate::{ToolError, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
 

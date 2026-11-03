@@ -1,5 +1,5 @@
 use opencadcodec::{CadDocument, DxfWriter, EntityType, Line, Text, Vector3};
-use qiyas_ai::{catalogue, execute, ToolError, ToolOutput};
+use qiyas_ai::{catalogue, surface, ToolError, ToolOutput};
 use qiyas_core::{Boq, BoqItem, Command, EntityFilter, Kind, Session, Source};
 use serde_json::{json, Value};
 
@@ -31,8 +31,42 @@ fn json_of(output: ToolOutput) -> Value {
     }
 }
 
-fn run(session: &mut Session, name: &str, input: Value) -> Result<Value, ToolError> {
-    execute(session, name, &input, Source::Ai).map(json_of)
+fn call(session: &mut Session, tool: &str, op: &str, args: Value) -> Result<Value, ToolError> {
+    output(session, tool, op, &args, Source::Ai).map(json_of)
+}
+
+fn output(
+    session: &mut Session,
+    tool: &str,
+    op: &str,
+    args: &Value,
+    source: Source,
+) -> Result<ToolOutput, ToolError> {
+    let key = if tool == surface::CAPTURE {
+        "source"
+    } else {
+        "op"
+    };
+    let mut input = json!({"args":args});
+    input[key] = json!(op);
+    let surface::Route::Session { tool, op, args } =
+        surface::route(tool, &input).map_err(ToolError::BadInput)?
+    else {
+        panic!("expected a session operation");
+    };
+    surface::run_session(session, &tool, &op, &args, source)
+}
+
+fn command(session: &mut Session, command: Value) -> Result<Value, ToolError> {
+    call(session, surface::EXECUTE, "run", json!({"command":command}))
+}
+
+fn inquiry(session: &mut Session, command: Value) -> Result<Value, ToolError> {
+    call(session, surface::READ, "run", json!({"command":command}))
+}
+
+fn query(session: &mut Session, args: Value) -> Result<Value, ToolError> {
+    call(session, surface::READ, "query", args)
 }
 
 /// Schema keywords the API's strict tool mode does not accept.
@@ -98,8 +132,12 @@ fn catalogue_schemas_are_strict_objects() {
 fn execute_measure_area_by_handle_marks_ai_source() {
     let (_dir, mut session) = sample();
     let rectangle = handles_of(&session, "LwPolyline")[0];
-    let out = run(&mut session, "measure_area", json!({ "handle": rectangle })).unwrap();
-    let m = &out["measurement"];
+    let out = command(
+        &mut session,
+        json!({"type":"measure_entity", "handle": rectangle }),
+    )
+    .unwrap();
+    let m = &out["outcome"]["measurement"];
     assert_eq!(m["source"], "ai");
     assert_eq!(m["kind"], "area");
     assert_eq!(m["unit"], "m2");
@@ -109,10 +147,11 @@ fn execute_measure_area_by_handle_marks_ai_source() {
     assert_eq!(session.takeoff.items[0].handles, [rectangle]);
 
     // By points, from MCP.
-    execute(
+    output(
         &mut session,
-        "measure_length",
-        &json!({ "points": [[0, 0], [3, 0], [3, 4]] }),
+        surface::EXECUTE,
+        "run",
+        &json!({"command":{"type":"measure_distance", "points": [[0, 0], [3, 0], [3, 4]] }}),
         Source::Mcp,
     )
     .unwrap();
@@ -123,17 +162,13 @@ fn execute_measure_area_by_handle_marks_ai_source() {
     // Both carry a default description; one the model gives is its own.
     assert!(session.takeoff.items.iter().all(|m| m.auto_description));
     assert_eq!(m["auto_description"], true);
-    let out = run(
-        &mut session,
-        "add_measurement",
-        json!({ "kind": "area", "handles": [rectangle], "description": "Slab" }),
-    )
+    let out = command(&mut session, json!({"type":"add_measurement", "kind": "area", "handles": [rectangle], "description": "Slab" }))
     .unwrap();
-    assert_eq!(out["measurement"]["auto_description"], false);
+    assert_eq!(out["outcome"]["measurement"]["auto_description"], false);
 }
 
 #[test]
-fn execute_find_entities_truncates_at_40kb() {
+fn generic_query_keeps_paging_and_bounds_the_model_reply() {
     let mut doc = CadDocument::new();
     doc.header.insertion_units = 6;
     for i in 0..2000 {
@@ -146,19 +181,27 @@ fn execute_find_entities_truncates_at_40kb() {
     DxfWriter::new(&doc).write_to_file(&path).unwrap();
     let mut session = Session::open(&path).unwrap();
 
-    let out = run(&mut session, "find_entities", json!({ "limit": 500 })).unwrap();
-    assert_eq!(out["truncated"], true);
+    let out = query(&mut session, json!({"kind":"window", "limit": 500 })).unwrap();
+    let compact = json_of(
+        surface::format_result(
+            surface::READ,
+            "query",
+            &json!({"kind":"window"}),
+            ToolOutput::Json(out.clone()),
+        )
+        .unwrap(),
+    );
+    assert!(compact.to_string().len() <= 48_000);
+    assert!(compact["artifact"].is_string());
     assert_eq!(out["total"], 2000);
     let rows = out["rows"].as_array().unwrap().len();
-    assert!(rows > 0 && rows < 500, "{rows}");
+    assert_eq!(rows, 500);
     assert_eq!(out["next_offset"], rows);
-    assert!(serde_json::to_vec(&out).unwrap().len() <= 40_960);
 
     // The next page starts where this one stopped.
-    let next = run(
+    let next = query(
         &mut session,
-        "find_entities",
-        json!({ "limit": 500, "offset": rows }),
+        json!({"kind":"window", "limit": 500, "offset": rows }),
     )
     .unwrap();
     assert_eq!(
@@ -170,7 +213,7 @@ fn execute_find_entities_truncates_at_40kb() {
 }
 
 #[test]
-fn extract_data_is_paged_under_40kb() {
+fn generic_extract_data_pages_and_bounds_the_model_reply() {
     let mut doc = CadDocument::new();
     doc.header.insertion_units = 6;
     for i in 0..3000 {
@@ -184,16 +227,24 @@ fn extract_data_is_paged_under_40kb() {
     let mut session = Session::open(&path).unwrap();
     let fields = json!(["handle", "kind", "layer", "length", "x", "y", "sheet"]);
 
-    let out = run(
+    let out = inquiry(
         &mut session,
-        "extract_data",
-        json!({ "fields": fields, "limit": 5000 }),
+        json!({"type":"extract_data", "fields": fields, "filter":{"limit":5000} }),
     )
     .unwrap();
-    assert_eq!(out["truncated"], true);
-    assert_eq!(out["total"], 3000);
+    let compact = json_of(
+        surface::format_result(
+            surface::READ,
+            "run",
+            &json!({}),
+            ToolOutput::Json(out.clone()),
+        )
+        .unwrap(),
+    );
+    assert!(compact.to_string().len() <= 48_000);
+    assert!(compact["artifact"].is_string());
     assert_eq!(
-        out["columns"],
+        out["outcome"]["columns"],
         json!([
             "Handle",
             "Kind",
@@ -204,21 +255,21 @@ fn extract_data_is_paged_under_40kb() {
             "Sheet"
         ])
     );
-    let rows = out["rows"].as_array().unwrap().len();
-    assert!(rows > 0 && rows < 3000, "{rows}");
-    assert_eq!(out["next_offset"], rows);
-    assert!(serde_json::to_vec(&out).unwrap().len() <= 40_960);
-    assert_eq!(out["rows"][0][3], "10.000");
+    let rows = out["outcome"]["rows"].as_array().unwrap().len();
+    assert_eq!(rows, 3000);
+    assert_eq!(out["outcome"]["rows"][0][3], "10.000");
+    let offset = 1200;
 
-    let next = run(
+    let next = inquiry(
         &mut session,
-        "extract_data",
-        json!({ "fields": ["handle"], "limit": 2, "offset": rows }),
+        json!({"type":"extract_data", "fields": ["handle"], "filter":{"limit":2,"offset":offset} }),
     )
     .unwrap();
-    assert_eq!(next["rows"][0][0], handles_at(&session, rows).to_string());
-    assert_eq!(next["next_offset"], rows + 2);
-    assert!(next.get("truncated").is_none());
+    assert_eq!(
+        next["outcome"]["rows"][0][0],
+        handles_at(&session, offset).to_string()
+    );
+    assert_eq!(next["outcome"]["rows"].as_array().unwrap().len(), 2);
     assert!(session.takeoff.items.is_empty());
 }
 
@@ -226,65 +277,69 @@ fn extract_data_is_paged_under_40kb() {
 fn inquiry_tools_measure_divide_and_extract() {
     let (_dir, mut session) = sample();
     let line = handles_of(&session, "Line")[0];
-    let out = run(&mut session, "measure_geometry", json!({ "handle": line })).unwrap();
-    assert_eq!(out["title"], "Line");
-    assert!(out["rows"]
+    let out = inquiry(
+        &mut session,
+        json!({"type":"measure_geometry", "handle": line }),
+    )
+    .unwrap();
+    assert_eq!(out["outcome"]["title"], "Line");
+    assert!(out["outcome"]["rows"]
         .as_array()
         .unwrap()
         .contains(&json!(["length", "10.000 m"])));
 
-    let out = run(&mut session, "id_point", json!({ "point": [2.5, 1] })).unwrap();
-    assert_eq!(out["rows"], json!([["x", "2.500 m"], ["y", "1.000 m"]]));
+    let out = inquiry(&mut session, json!({"type":"id_point", "p": [2.5, 1] })).unwrap();
+    assert_eq!(
+        out["outcome"]["rows"],
+        json!([["x", "2.500 m"], ["y", "1.000 m"]])
+    );
 
-    let out = run(
+    let out = command(
         &mut session,
-        "divide_along",
-        json!({ "handle": line, "count": 4 }),
+        json!({"type":"divide_along", "handle": line, "count": 4 }),
     )
     .unwrap();
-    assert_eq!(out["measurement"]["value"], 3.0);
-    assert_eq!(out["measurement"]["source"], "ai");
-    assert_eq!(out["ui"]["action"], "redraw");
+    assert_eq!(out["outcome"]["measurement"]["value"], 3.0);
+    assert_eq!(out["outcome"]["measurement"]["source"], "ai");
+    assert_eq!(out["step"]["source"], "ai");
     assert!(session.undo_if(Source::Ai));
     assert!(session.takeoff.items.is_empty());
 
     // The step is in metres: every 2.5 m along the 10 m line.
-    let out = run(
+    let out = command(
         &mut session,
-        "measure_along",
-        json!({ "handle": line, "step": 2.5 }),
+        json!({"type":"measure_along", "handle": line, "step": 2.5 }),
     )
     .unwrap();
     assert_eq!(
-        out["measurement"]["points"],
+        out["outcome"]["measurement"]["points"],
         json!([[2.5, 0.0], [5.0, 0.0], [7.5, 0.0]])
     );
 
-    let out = run(
-        &mut session,
-        "extract_data",
-        json!({ "block_name": "DOOR", "fields": ["block_name", "x"], "attributes": ["MARK"] }),
-    )
+    let out = inquiry(&mut session, json!({"type":"extract_data", "filter":{"block_name":"DOOR"}, "fields":["block_name","x",{"attribute":"MARK"}] }))
     .unwrap();
-    assert_eq!(out["columns"], json!(["Block", "X (m)", "MARK"]));
-    assert_eq!(out["total"], 3);
-    assert_eq!(out["rows"][0], json!(["DOOR", "1.000", ""]));
-    assert!(out["next_offset"].is_null());
+    assert_eq!(out["outcome"]["columns"], json!(["Block", "X (m)", "MARK"]));
+    assert_eq!(out["outcome"]["rows"].as_array().unwrap().len(), 3);
+    assert_eq!(out["outcome"]["rows"][0], json!(["DOOR", "1.000", ""]));
 
-    let err = run(
+    let err = inquiry(
         &mut session,
-        "extract_data",
-        json!({ "fields": [{ "attribute": "MARK" }] }),
+        json!({"type":"extract_data", "filter":{}, "fields": ["missing_field"] }),
     )
     .unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)));
-    let err = run(
+    assert!(matches!(
+        err.json()["code"].as_str(),
+        Some("invalid_value" | "missing_field")
+    ));
+    let err = command(
         &mut session,
-        "divide_along",
-        json!({ "handle": line, "count": 1 }),
+        json!({"type":"divide_along", "handle": line, "count": 1 }),
     )
     .unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)));
+    assert!(matches!(
+        err.json()["code"].as_str(),
+        Some("invalid_value" | "missing_field")
+    ));
 }
 
 /// The handle of the `offset`-th entity of the current sheet.
@@ -317,9 +372,10 @@ fn dark_pixels(png: &[u8]) -> usize {
 fn view_image_shows_text_and_solid_fills() {
     let (_dir, mut session) = sample();
     let picture = |session: &mut Session| {
-        let out = execute(
+        let out = output(
             session,
-            "view_image",
+            surface::CAPTURE,
+            "picture",
             &json!({ "width": 800, "bounds": [[100, 100], [110, 105]] }),
             Source::Ai,
         )
@@ -357,9 +413,10 @@ fn view_image_shows_text_and_solid_fills() {
 #[test]
 fn view_image_is_a_png_of_the_right_size() {
     let (_dir, mut session) = sample();
-    let out = execute(
+    let out = output(
         &mut session,
-        "view_image",
+        surface::CAPTURE,
+        "picture",
         &json!({ "width": 640 }),
         Source::Ai,
     )
@@ -375,9 +432,10 @@ fn view_image_is_a_png_of_the_right_size() {
     assert!(caption.contains("bounds"), "{caption}");
 
     // Bounds given: a 2:1 box gives a 2:1 picture.
-    let out = execute(
+    let out = output(
         &mut session,
-        "view_image",
+        surface::CAPTURE,
+        "picture",
         &json!({ "width": 400, "bounds": [[0, 0], [10, 5]] }),
         Source::Ai,
     )
@@ -392,8 +450,8 @@ fn view_image_is_a_png_of_the_right_size() {
 #[test]
 fn unknown_tool_is_an_error() {
     let (_dir, mut session) = sample();
-    let err = execute(&mut session, "delete_everything", &json!({}), Source::Ai).unwrap_err();
-    assert!(matches!(err, ToolError::UnknownTool(ref n) if n == "delete_everything"));
+    let err = surface::route("delete_everything", &json!({})).unwrap_err();
+    assert!(err.contains("delete_everything"), "{err}");
     // Every offered tool routes to its runner with valid input.
     for tool in catalogue() {
         let input = match tool.name {
@@ -424,17 +482,16 @@ fn unknown_tool_is_an_error() {
 #[test]
 fn add_markup_lands_on_the_markup_layer() {
     let (dir, mut session) = sample();
-    let out = run(
+    let out = command(
         &mut session,
-        "add_markup",
-        json!({
+        json!({"type":"add_markup",
             "points": [[0, 0], [4, 0], [4, 3]],
             "text": "Check this wall",
             "kind": "cloud"
         }),
     )
     .unwrap();
-    assert_eq!(out["ui"]["action"], "show_markup");
+    assert_eq!(out["outcome"]["measurement"]["unit"], "markup");
     let m = &session.takeoff.items[0];
     assert_eq!(
         (m.kind, m.value, m.unit.as_str()),
@@ -472,14 +529,14 @@ fn count_with_non_insert_handles_advises_and_duplicate_handles_still_fail() {
     let count =
         |handles: Vec<u64>| json!({ "kind": "count", "handles": handles, "description": "Doors" });
 
-    let mut command = count(vec![doors[0], line]);
-    command["type"] = json!("add_measurement");
+    let mut input = count(vec![doors[0], line]);
+    input["type"] = json!("add_measurement");
     let out = json_of(
         qiyas_ai::surface::run_session(
             &mut session,
             qiyas_ai::surface::EXECUTE,
             "run",
-            &json!({"command":command}),
+            &json!({"command":input}),
             Source::Ai,
         )
         .unwrap(),
@@ -491,51 +548,84 @@ fn count_with_non_insert_handles_advises_and_duplicate_handles_still_fail() {
         .iter()
         .any(|a| a["code"] == "count_non_block"));
     assert_eq!(session.takeoff.items.last().unwrap().value, 2.0);
-    let err = run(
-        &mut session,
-        "add_measurement",
-        count(vec![doors[0], doors[0]]),
-    )
+    let err = command(&mut session, {
+        let mut input = count(vec![doors[0], doors[0]]);
+        input["type"] = json!("add_measurement");
+        input
+    })
     .unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+    assert!(
+        matches!(
+            err.json()["code"].as_str(),
+            Some("invalid_value" | "missing_field" | "unknown_field")
+        ),
+        "{err:?}"
+    );
     assert_eq!(session.takeoff.items.len(), 1);
 
-    let out = run(&mut session, "add_measurement", count(doors)).unwrap();
-    assert_eq!(out["measurement"]["value"], 3.0);
-    assert_eq!(out["measurement"]["source"], "ai");
+    let out = command(&mut session, {
+        let mut input = count(doors);
+        input["type"] = json!("add_measurement");
+        input
+    })
+    .unwrap();
+    assert_eq!(out["outcome"]["measurement"]["value"], 3.0);
+    assert_eq!(out["outcome"]["measurement"]["source"], "ai");
 }
 
 #[test]
 fn missing_handles_blocks_and_ids_are_bad_input() {
     let (_dir, mut session) = sample();
-    for (name, input) in [
-        ("measure_length", json!({ "handle": 999_999 })),
-        ("measure_area", json!({ "handle": 999_999 })),
-        ("measure_area", json!({})),
-        ("count_blocks", json!({ "block_name": "WINDOW" })),
-        ("get_entity", json!({ "handle": 999_999 })),
-        ("set_description", json!({ "id": "nope", "text": "x" })),
-        ("remove_measurement", json!({ "id": "nope" })),
-        ("set_sheet", json!({ "sheet": "Layout 9" })),
+    for (input, code) in [
         (
-            "show_layers",
-            json!({ "names": ["NO-SUCH"], "visible": false }),
+            json!({"type":"add_measurement","kind":"length","description":"Length","handles":[999_999]}),
+            "not_found",
         ),
-        ("find_entities", json!({ "colour": "red" })),
+        (
+            json!({"type":"measure_entity","handle":999_999}),
+            "not_found",
+        ),
+        (json!({"type":"measure_area"}), "missing_field"),
+        (
+            json!({"type":"count_block","block_name":"WINDOW"}),
+            "invalid_value",
+        ),
+        (
+            json!({"type":"set_description","id":"nope","text":"x"}),
+            "invalid_value",
+        ),
+        (
+            json!({"type":"remove_measurement","id":"nope"}),
+            "invalid_value",
+        ),
+        (
+            json!({"type":"set_height","id":"nope","height":3.0}),
+            "invalid_value",
+        ),
+        (
+            json!({"type":"link_boq","id":"nope","code":"A.1"}),
+            "invalid_value",
+        ),
+        (json!({"type":"set_sheet","block":"Layout 9"}), "not_found"),
+        (
+            json!({"type":"set_layer_hidden","name":"NO-SUCH","hidden":true}),
+            "invalid_value",
+        ),
     ] {
-        let err = run(&mut session, name, input).unwrap_err();
-        assert!(matches!(err, ToolError::BadInput(_)), "{name}: {err:?}");
+        let err = command(&mut session, input.clone()).unwrap_err();
+        assert_eq!(err.json()["code"], code, "{input}: {err:?}");
     }
+    assert!(query(&mut session, json!({"kind":"entity","handle":999_999})).is_err());
+    assert!(query(&mut session, json!({"kind":"window","colour":"red"})).is_err());
     assert!(session.takeoff.items.is_empty());
 
     // Block names match case-insensitively.
-    let out = run(
+    let out = command(
         &mut session,
-        "count_blocks",
-        json!({ "block_name": "door" }),
+        json!({"type":"count_block", "block_name": "door" }),
     )
     .unwrap();
-    assert_eq!(out["measurement"]["value"], 3.0);
+    assert_eq!(out["outcome"]["measurement"]["value"], 3.0);
 }
 
 #[test]
@@ -560,17 +650,23 @@ fn compare_and_conflict_tools_work() {
         0,
     );
     session.run(Command::SetBoq { boq: bill }).unwrap();
-    let out = run(
+    let out = command(
         &mut session,
-        "measure_length",
-        json!({ "points": [[0, 0], [10, 0]] }),
+        json!({"type":"measure_distance", "points": [[0, 0], [10, 0]] }),
     )
     .unwrap();
-    let id = out["measurement"]["id"].as_str().unwrap().to_string();
-    run(&mut session, "link_boq", json!({ "id": id, "code": "A.1" })).unwrap();
+    let id = out["outcome"]["measurement"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    command(
+        &mut session,
+        json!({"type":"link_boq", "id": id, "code": "A.1" }),
+    )
+    .unwrap();
     assert_eq!(session.takeoff.items[0].boq_code.as_deref(), Some("A.1"));
 
-    let out = run(&mut session, "compare_boq", json!({})).unwrap();
+    let out = call(&mut session, surface::EXECUTE, "compare", json!({})).unwrap();
     assert_eq!(out["total"], 2, "{out}");
     assert_eq!(out["by_kind"]["quantity_mismatch"], 1, "{out}");
     assert_eq!(out["by_kind"]["not_in_drawings"], 1, "{out}");
@@ -584,33 +680,75 @@ fn compare_and_conflict_tools_work() {
     assert_eq!(mismatch["found"], 10.0);
     let conflict_id = mismatch["id"].as_str().unwrap().to_string();
 
-    let out = run(
-        &mut session,
-        "resolve_conflict",
-        json!({ "id": conflict_id, "status": "ignored", "note": "Walls are on sheet 2" }),
-    )
+    let out = command(&mut session, json!({"type":"resolve_conflict", "id": conflict_id, "status": "ignored", "note": "Walls are on sheet 2" }))
     .unwrap();
-    assert_eq!(out["conflict"]["status"], "ignored");
-    for input in [
-        json!({ "id": "nope", "status": "resolved", "note": "" }),
-        json!({ "id": conflict_id, "status": "done", "note": "" }),
+    assert_eq!(out["outcome"]["type"], "changed");
+    assert_eq!(
+        session
+            .conflicts
+            .iter()
+            .find(|c| c.id == conflict_id)
+            .unwrap()
+            .status,
+        qiyas_core::ConflictStatus::Ignored
+    );
+    for (input, code) in [
+        (
+            json!({"type":"resolve_conflict", "id":"nope", "status":"resolved", "note":""}),
+            "conflict",
+        ),
+        (
+            json!({"type":"resolve_conflict", "id":conflict_id, "status":"done", "note":""}),
+            "invalid_value",
+        ),
     ] {
-        let err = run(&mut session, "resolve_conflict", input).unwrap_err();
-        assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+        let err = command(&mut session, input).unwrap_err();
+        assert_eq!(err.json()["code"], code, "{err:?}");
     }
 
     // A new comparison keeps the status and note; a wider tolerance does not change the ids.
-    let out = run(&mut session, "compare_boq", json!({ "tolerance": 10 })).unwrap();
+    let out = call(
+        &mut session,
+        surface::EXECUTE,
+        "compare",
+        json!({ "tolerance": 10 }),
+    )
+    .unwrap();
     assert_eq!(out["rows"][0]["id"], conflict_id.as_str());
     assert_eq!(out["rows"][0]["status"], "ignored");
     assert_eq!(out["rows"][0]["note"], "Walls are on sheet 2");
-    let list = run(&mut session, "list_conflicts", json!({ "offset": 1 })).unwrap();
+    let list = call(
+        &mut session,
+        surface::READ,
+        "records",
+        json!({"collection":"conflicts", "offset": 1 }),
+    )
+    .unwrap();
     assert_eq!(list["total"], 2);
-    assert_eq!(list["rows"].as_array().unwrap().len(), 1);
-    assert_eq!(list["by_status"]["ignored"], 1);
+    assert_eq!(list["records"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        session
+            .conflicts
+            .iter()
+            .filter(|c| c.status == qiyas_core::ConflictStatus::Ignored)
+            .count(),
+        1
+    );
 
-    let err = run(&mut session, "compare_boq", json!({ "tolerance": -1 })).unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+    let err = call(
+        &mut session,
+        surface::EXECUTE,
+        "compare",
+        json!({ "tolerance": -1 }),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err.json()["code"].as_str(),
+            Some("invalid_value" | "missing_field" | "unknown_field")
+        ),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -631,7 +769,7 @@ fn compare_counts_blocks_on_layers_the_user_hides() {
     let mut session = Session::open(&path).unwrap();
     session.set_layer_hidden("A-DOOR", true);
 
-    let out = run(&mut session, "compare_boq", json!({})).unwrap();
+    let out = call(&mut session, surface::EXECUTE, "compare", json!({})).unwrap();
     assert_eq!(out["total"], 1, "{out}");
     assert_eq!(out["rows"][0]["kind"], "schedule_vs_plan");
     assert_eq!(out["rows"][0]["expected"], 2.0);
@@ -641,10 +779,9 @@ fn compare_counts_blocks_on_layers_the_user_hides() {
 #[test]
 fn heights_are_metres_and_zoom_returns_bounds() {
     let (_dir, mut session) = sample();
-    let out = run(
+    let out = command(
         &mut session,
-        "add_measurement",
-        json!({
+        json!({"type":"add_measurement",
             "kind": "volume",
             "points": [[0, 0], [4, 0], [4, 3], [0, 3]],
             "height": 0.2,
@@ -652,26 +789,46 @@ fn heights_are_metres_and_zoom_returns_bounds() {
         }),
     )
     .unwrap();
-    assert!((out["measurement"]["shown"].as_f64().unwrap() - 2.4).abs() < 1e-9);
+    assert!((out["outcome"]["measurement"]["shown"].as_f64().unwrap() - 2.4).abs() < 1e-9);
 
     let doors = handles_of(&session, "Insert");
-    let out = run(&mut session, "zoom_to", json!({ "handles": [doors[0]] })).unwrap();
+    let out = call(
+        &mut session,
+        surface::EXECUTE,
+        "view",
+        json!({ "handles": [doors[0]] }),
+    )
+    .unwrap();
     assert_eq!(out["ui"]["action"], "zoom");
     // The plain door's leaf runs from (1, 1) to (1.9, 1).
     let b = &out["ui"]["bounds"];
     assert!((b[0][0].as_f64().unwrap() - 1.0).abs() < 1e-6, "{b}");
     assert!((b[1][0].as_f64().unwrap() - 1.9).abs() < 1e-6, "{b}");
 
-    let takeoff = run(&mut session, "list_takeoff", json!({})).unwrap();
-    assert_eq!(takeoff["rows"].as_array().unwrap().len(), 1);
-    assert_eq!(takeoff["totals"][0]["unit"], "m3");
+    let takeoff = call(
+        &mut session,
+        surface::READ,
+        "records",
+        json!({"collection":"takeoff",}),
+    )
+    .unwrap();
+    assert_eq!(takeoff["records"].as_array().unwrap().len(), 1);
+    assert_eq!(takeoff["records"][0]["unit"], "m3");
+    assert_eq!(json!(session.takeoff.totals())[0]["unit"], "m3");
 }
 
 #[test]
 fn import_boq_and_list_boq() {
     let (dir, mut session) = sample();
-    let err = run(&mut session, "list_boq", json!({})).unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+    let empty = call(
+        &mut session,
+        surface::READ,
+        "records",
+        json!({"collection":"boq"}),
+    )
+    .unwrap();
+    assert_eq!(empty["total"], 0);
+    assert!(session.boq.is_none());
 
     let path = dir.path().join("boq.xlsx");
     let mut book = rust_xlsxwriter::Workbook::new();
@@ -687,19 +844,37 @@ fn import_boq_and_list_boq() {
     book.save(&path).unwrap();
 
     let missing = json!({ "path": dir.path().join("nope.xlsx") });
-    let err = run(&mut session, "import_boq", missing).unwrap_err();
-    assert!(matches!(err, ToolError::BadInput(_)), "{err:?}");
+    let err = call(&mut session, surface::EXECUTE, "import_boq", missing).unwrap_err();
+    assert!(
+        matches!(
+            err.json()["code"].as_str(),
+            Some("invalid_value" | "missing_field" | "unknown_field")
+        ),
+        "{err:?}"
+    );
 
-    let out = run(&mut session, "import_boq", json!({ "path": path })).unwrap();
+    let out = call(
+        &mut session,
+        surface::EXECUTE,
+        "import_boq",
+        json!({ "path": path }),
+    )
+    .unwrap();
     assert_eq!(out["items"], 1);
     assert_eq!(out["sections"], json!(["Finishes"]));
     assert_eq!(session.top_step_source(), Some(Source::Ai));
 
-    let out = run(&mut session, "list_boq", json!({})).unwrap();
+    let out = call(
+        &mut session,
+        surface::READ,
+        "records",
+        json!({"collection":"boq",}),
+    )
+    .unwrap();
     assert_eq!(out["total"], 1);
-    assert_eq!(out["rows"][0]["code"], "F.1");
-    assert_eq!(out["rows"][0]["unit"], "m2");
-    assert_eq!(out["rows"][0]["section"], "Finishes");
+    assert_eq!(out["records"][0]["code"], "F.1");
+    assert_eq!(out["records"][0]["unit"], "m2");
+    assert_eq!(out["records"][0]["section"], "Finishes");
 
     assert!(session.undo_if(Source::Ai));
     assert_eq!(session.boq, None);
@@ -732,22 +907,30 @@ fn import_boq_opens_files_beside_the_drawing_only() {
     write_boq(&dir.join("boq").join("sub.xlsx"));
 
     // Relative paths are read from the drawing's folder, whatever the process's own folder is.
-    let out = run(
+    let out = call(
         &mut session,
+        surface::EXECUTE,
         "import_boq",
         json!({ "path": "test-boq.xlsx" }),
     )
     .unwrap();
     assert_eq!(out["items"], 1, "{out}");
-    let out = run(
+    let out = call(
         &mut session,
+        surface::EXECUTE,
         "import_boq",
         json!({ "path": "boq/sub.xlsx" }),
     )
     .unwrap();
     assert_eq!(out["items"], 1, "{out}");
     let inside = dir.join("test-boq.xlsx");
-    run(&mut session, "import_boq", json!({ "path": inside })).unwrap();
+    call(
+        &mut session,
+        surface::EXECUTE,
+        "import_boq",
+        json!({ "path": inside }),
+    )
+    .unwrap();
 
     // Anything outside the folder is refused, before it is read.
     let outside = outer.path().join("x.xlsx");
@@ -764,7 +947,13 @@ fn import_boq_opens_files_beside_the_drawing_only() {
         refused.push(json!("link.xlsx"));
     }
     for path in refused {
-        let err = run(&mut session, "import_boq", json!({ "path": path })).unwrap_err();
+        let err = call(
+            &mut session,
+            surface::EXECUTE,
+            "import_boq",
+            json!({ "path": path }),
+        )
+        .unwrap_err();
         match err {
             ToolError::BadInput(why) => assert_eq!(why, OUTSIDE, "{path}"),
             other => panic!("{path}: {other:?}"),
@@ -773,24 +962,30 @@ fn import_boq_opens_files_beside_the_drawing_only() {
 }
 
 #[test]
-fn json_floats_are_rounded_to_6_decimals() {
+fn generic_results_keep_measurement_precision_and_integer_handles() {
     let (_dir, mut session) = sample();
     // 0.1 x 0.2 is 0.020000000000000004 in floating point.
-    let out = run(
+    let out = command(
         &mut session,
-        "add_measurement",
-        json!({
+        json!({"type":"add_measurement",
             "kind": "area",
             "points": [[0, 0], [0.1, 0], [0.1, 0.2], [0, 0.2]],
             "description": "Pad"
         }),
     )
     .unwrap();
-    assert_eq!(out["measurement"]["value"].to_string(), "0.02", "{out}");
-    assert_eq!(out["measurement"]["shown"].to_string(), "0.02", "{out}");
+    assert_eq!(
+        out["outcome"]["measurement"]["value"],
+        json!(session.takeoff.items[0].value)
+    );
+    assert_eq!(
+        out["outcome"]["measurement"]["shown"],
+        json!(session.takeoff.items[0].shown)
+    );
+    assert!((session.takeoff.items[0].shown - 0.02).abs() < 1e-15);
     // Handles stay integers.
     let doors = handles_of(&session, "Insert");
-    let out = run(&mut session, "get_entity", json!({ "handle": doors[0] })).unwrap();
+    let out = query(&mut session, json!({"kind":"entity", "handle": doors[0] })).unwrap();
     assert_eq!(out["entity"]["handle"], json!(doors[0]));
     assert!(out["entity"]["handle"].is_u64());
 }
@@ -798,9 +993,14 @@ fn json_floats_are_rounded_to_6_decimals() {
 #[test]
 fn view_image_is_800_wide_by_default() {
     let (_dir, mut session) = sample();
-    let ToolOutput::Image { png, .. } =
-        execute(&mut session, "view_image", &json!({}), Source::Ai).unwrap()
-    else {
+    let ToolOutput::Image { png, .. } = output(
+        &mut session,
+        surface::CAPTURE,
+        "picture",
+        &json!({}),
+        Source::Ai,
+    )
+    .unwrap() else {
         panic!("expected an image");
     };
     assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 800);
@@ -818,31 +1018,20 @@ fn entity_tools_reach_inside_blocks_with_a_chain() {
         .common()
         .handle
         .value();
-    let out = run(
+    let out = query(
         &mut session,
-        "get_entity",
-        json!({ "handle": leaf, "chain": [scaled] }),
+        json!({"kind":"entity", "handle": leaf, "chain": [scaled] }),
     )
     .unwrap();
     assert_eq!(out["entity"]["inside_block"], "DOOR");
     assert!((out["entity"]["length"].as_f64().unwrap() - 1.8).abs() < 1e-9);
 
-    let out = run(
-        &mut session,
-        "measure_length",
-        json!({ "handle": leaf, "chain": [scaled] }),
-    )
+    let out = command(&mut session, json!({"type":"add_measurement","kind":"length","description":"Length", "handles":[leaf], "chain": [scaled] }))
     .unwrap();
-    assert!((out["measurement"]["value"].as_f64().unwrap() - 1.8).abs() < 1e-9);
-    assert_eq!(out["measurement"]["chain"], json!([scaled]));
-    assert!(matches!(
-        run(
-            &mut session,
-            "measure_length",
-            json!({ "chain": [scaled], "points": [[0, 0], [1, 0]] })
-        ),
-        Err(ToolError::BadInput(_))
-    ));
+    assert!((out["outcome"]["measurement"]["value"].as_f64().unwrap() - 1.8).abs() < 1e-9);
+    assert_eq!(out["outcome"]["measurement"]["chain"], json!([scaled]));
+    let error = command(&mut session, json!({"type":"add_measurement", "kind":"length", "description":"Length", "chain":[scaled], "points":[[0,0],[1,0]]})).unwrap_err();
+    assert!(error.to_string().contains("chain"), "{error}");
 }
 
 #[test]
@@ -851,118 +1040,92 @@ fn tools_see_xref_layers_blocks_and_entities() {
     let path = qiyas_core::fixtures::write_xref_pair(dir.path());
     let mut session = Session::open(&path).unwrap();
 
-    let layers = run(&mut session, "list_layers", json!({})).unwrap();
+    let layers = query(&mut session, json!({"kind":"layers",})).unwrap();
     assert!(layers.to_string().contains("plan-arch|A-WALL"), "{layers}");
 
     // DOOR is only in the xref: still a block to count, on the xref's layer.
-    let out = run(
+    let out = command(
         &mut session,
-        "count_blocks",
-        json!({ "block_name": "DOOR", "layer": "plan-arch|A-DOOR" }),
+        json!({"type":"count_block", "block_name": "DOOR", "layer": "plan-arch|A-DOOR" }),
     )
     .unwrap();
-    assert_eq!(out["measurement"]["value"], 3.0);
+    assert_eq!(out["outcome"]["measurement"]["value"], 3.0);
 
-    let found = run(
+    let found = query(
         &mut session,
-        "find_entities",
-        json!({ "layer": "plan-arch|A-WALL", "kind": "Line" }),
+        json!({"kind":"window", "layer": "plan-arch|A-WALL", "type": "Line" }),
     )
     .unwrap();
     let row = &found["rows"][0];
     assert_eq!(row["xref"], "plan-arch");
-    let out = run(
-        &mut session,
-        "measure_length",
-        json!({ "handle": row["handle"], "chain": row["chain"] }),
-    )
+    let out = command(&mut session, json!({"type":"add_measurement","kind":"length","description":"Length", "handles":[row["handle"]], "chain": row["chain"] }))
     .unwrap();
-    assert!((out["measurement"]["value"].as_f64().unwrap() - 10.0).abs() < 1e-9);
-    assert_eq!(out["measurement"]["xref"], "plan-arch");
+    assert!((out["outcome"]["measurement"]["value"].as_f64().unwrap() - 10.0).abs() < 1e-9);
+    assert_eq!(out["outcome"]["measurement"]["xref"], "plan-arch");
 
-    let out = run(
+    let out = command(
         &mut session,
-        "show_layers",
-        json!({ "names": ["plan-arch|A-WALL"], "visible": false }),
+        json!({"type":"set_layer_hidden", "name":"plan-arch|A-WALL", "hidden": true }),
     )
     .unwrap();
-    assert_eq!(out["hidden"], json!(["plan-arch|A-WALL"]));
+    assert_eq!(out["effect"], "view");
+    assert_eq!(session.hidden_layers(), vec!["plan-arch|A-WALL"]);
 }
 
 #[test]
 fn add_dimension_draws_real_dimensions_of_each_kind() {
     let (_dir, mut session) = sample();
-    let linear = run(
-        &mut session,
-        "add_dimension",
-        json!({ "kind": "linear", "p1": [0, 0], "p2": [4, 0], "line_point": [2, -1] }),
-    )
+    let linear = command(&mut session, json!({"type":"dimension", "kind": "linear", "p1": [0, 0], "p2": [4, 0], "line_point": [2, -1] }))
     .unwrap();
-    let dims = linear["dimensions"].as_array().unwrap();
+    let dims = linear["outcome"]["handles"].as_array().unwrap();
     assert_eq!(dims.len(), 1);
     let h = dims[0].as_u64().unwrap();
     assert!(matches!(
         session.drawing.doc.get_entity(opencadcodec::Handle::new(h)),
         Some(EntityType::Dimension(_))
     ));
-    let read = run(&mut session, "read_dimensions", json!({})).unwrap();
+    let read = query(&mut session, json!({"kind":"dimensions",})).unwrap();
     assert!(read.to_string().contains("4"), "{read}");
     assert!(
         session.is_dirty(),
         "a drawing change, saved with the drawing"
     );
 
-    run(
+    command(
         &mut session,
-        "add_dimension",
-        json!({ "kind": "aligned", "p1": [0, 0], "p2": [3, 4], "offset": 0.5 }),
+        json!({"type":"dimension", "kind": "aligned", "p1": [0, 0], "p2": [3, 4], "offset": 0.5 }),
     )
     .unwrap();
-    run(
-        &mut session,
-        "add_dimension",
-        json!({ "kind": "angular", "vertex": [0, 0], "p1": [4, 0], "p2": [0, 4], "arc_point": [2, 2] }),
-    )
+    command(&mut session, json!({"type":"dimension", "kind": "angular", "vertex": [0, 0], "p1": [4, 0], "p2": [0, 4], "arc_point": [2, 2] }))
     .unwrap();
-    run(
+    command(
         &mut session,
-        "add_dimension",
-        json!({ "kind": "ordinate", "point": [4, 0], "leader_end": [4, -2] }),
+        json!({"type":"dimension", "kind": "ordinate", "feature": [4, 0], "leader_end": [4, -2] }),
     )
     .unwrap();
     let arc = handles_of(&session, "Arc")[0];
     for kind in ["radius", "diameter", "arc_length"] {
-        run(
+        command(
             &mut session,
-            "add_dimension",
-            json!({ "kind": kind, "handle": arc, "point": [3.5, 12] }),
+            json!({"type":"dimension", "kind": kind, "target":{"handle":arc}, "point": [3.5, 12] }),
         )
         .unwrap_or_else(|e| panic!("{kind}: {e}"));
     }
     let base = h;
-    let out = run(
-        &mut session,
-        "add_dimension",
-        json!({ "kind": "continue", "handle": base, "points": [[6, 0], [9, 0]] }),
-    )
+    let out = command(&mut session, json!({"type":"dimension", "kind": "continue", "from":{"handle":base}, "points": [[6, 0], [9, 0]] }))
     .unwrap();
-    assert_eq!(out["dimensions"].as_array().unwrap().len(), 2);
-    let out = run(
-        &mut session,
-        "add_dimension",
-        json!({ "kind": "baseline", "handle": base, "points": [[6, 0]] }),
-    )
+    assert_eq!(out["outcome"]["handles"].as_array().unwrap().len(), 2);
+    let out = command(&mut session, json!({"type":"dimension", "kind": "baseline", "from":{"handle":base}, "points": [[6, 0]] }))
     .unwrap();
-    assert_eq!(out["dimensions"].as_array().unwrap().len(), 1);
+    assert_eq!(out["outcome"]["handles"].as_array().unwrap().len(), 1);
 }
 
 #[test]
 fn add_dimension_names_what_is_missing() {
     let (_dir, mut session) = sample();
-    let err = run(
+    let err = command(
         &mut session,
-        "add_dimension",
-        json!({ "kind": "linear", "p1": [0, 0], "p2": [4, 0] }),
+        json!({"type":"dimension", "kind": "linear", "p1": [0, 0], "p2": [4, 0] }),
     )
     .unwrap_err();
     assert!(err.to_string().contains("line_point"), "{err}");
@@ -972,36 +1135,153 @@ fn add_dimension_names_what_is_missing() {
 #[test]
 fn add_comment_draws_a_cloud_and_list_comments_reads_it() {
     let (_dir, mut session) = sample();
-    let out = run(
-        &mut session,
-        "add_comment",
-        json!({ "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "text": "Check the door width" }),
-    )
+    let out = command(&mut session, json!({"type":"comment", "points": [[0, 0], [4, 0], [4, 3], [0, 3]], "text": "Check the door width" }))
     .unwrap();
-    assert_eq!(out["layer"], "COMMENTS");
-    let cloud = out["cloud"].as_u64().unwrap();
-    let list = run(&mut session, "list_comments", json!({})).unwrap();
-    let comments = list["comments"].as_array().unwrap();
+    assert_eq!(
+        session
+            .entity_info(out["outcome"]["handles"][0].as_u64().unwrap(), &[])
+            .unwrap()
+            .layer,
+        "COMMENTS"
+    );
+    let cloud = out["outcome"]["handles"][0].as_u64().unwrap();
+    let list = inquiry(&mut session, json!({"type":"list_comments",})).unwrap();
+    let comments = list["outcome"]["comments"].as_array().unwrap();
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0]["handle"], cloud);
     assert_eq!(comments[0]["text"], "Check the door width");
     assert!(session.undo_if(Source::Ai), "the AI's own step");
-    let list = run(&mut session, "list_comments", json!({})).unwrap();
-    assert!(list["comments"].as_array().unwrap().is_empty());
+    let list = inquiry(&mut session, json!({"type":"list_comments",})).unwrap();
+    assert!(list["outcome"]["comments"].as_array().unwrap().is_empty());
 }
 
 #[test]
 fn zero_count_and_empty_summary_keep_scope_and_limits() {
     let (_dir, mut s) = sample();
     s.set_layer_hidden("A-DOOR", true);
-    let summary = run(&mut s, "block_summary", json!({})).unwrap();
+    let summary = query(&mut s, json!({"kind":"blocks",})).unwrap();
     assert_eq!(summary["count_scope"], qiyas_core::INSERT_COUNT_SCOPE);
     assert_eq!(summary["visibility_policy"], "as_shown");
     assert!(summary["limitations"]
         .as_str()
         .unwrap()
         .contains("Not a complete visible count"));
-    let count = run(&mut s, "count_blocks", json!({"block_name":"DOOR"})).unwrap();
+    let count = command(&mut s, json!({"type":"count_block","block_name":"DOOR"})).unwrap();
     assert!(count.to_string().contains(qiyas_core::INSERT_COUNT_SCOPE));
     assert!(count.to_string().contains("Not a complete visible count"));
+}
+
+#[test]
+fn generic_commands_keep_reported_defaults_warnings_and_undo_source() {
+    let (_dir, mut session) = sample();
+    let out = command(
+        &mut session,
+        json!({"type":"text","value":"Concourse","at":[100,100]}),
+    )
+    .unwrap();
+    assert_eq!(out["step"]["source"], "ai");
+    assert_eq!(out["step"]["undoable"], true);
+    assert_eq!(out["defaults_used"], out["outcome"]["defaults_used"]);
+    assert!(out["defaults_used"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["field"] == "/height"));
+    let handle = out["outcome"]["handles"][0].as_u64().unwrap();
+    assert!(session.entity_info(handle, &[]).is_ok());
+    let read = inquiry(
+        &mut session,
+        json!({"type":"id_point","p":[0,0],"unused":true}),
+    )
+    .unwrap();
+    assert_eq!(read["warnings"], read["outcome"]["warnings"]);
+    assert!(read["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w["pointer"] == "/unused"));
+    let error = command(
+        &mut session,
+        json!({"type":"text","value":"Refused","at":[0,0],"unused":true}),
+    )
+    .unwrap_err();
+    assert_eq!(error.json()["code"], "unknown_field");
+    let undo = call(&mut session, surface::EXECUTE, "undo_own", json!({})).unwrap();
+    assert_eq!(undo["undone"], true);
+    assert!(session.entity_info(handle, &[]).is_err());
+}
+
+#[test]
+fn direct_reads_and_view_keep_saved_conversation_fields() {
+    let (_dir, mut session) = sample();
+    let layers = query(&mut session, json!({"kind":"layers"})).unwrap();
+    assert!(layers["rows"].is_array());
+    assert!(layers["total"].is_number());
+    assert!(layers["rows"][0]["color"]
+        .as_str()
+        .unwrap()
+        .starts_with('#'));
+    assert!(layers.get("outcome").is_none());
+    let texts = query(&mut session, json!({"kind":"texts"})).unwrap();
+    assert!(texts["rows"].is_array());
+    assert!(texts["units"].is_string());
+    let dimensions = query(&mut session, json!({"kind":"dimensions"})).unwrap();
+    assert!(dimensions["rows"].is_array());
+    assert_eq!(dimensions["units"], texts["units"]);
+    let checked = call(
+        &mut session,
+        surface::READ,
+        "check",
+        json!({"rules":["literal_newline"]}),
+    )
+    .unwrap();
+    assert!(checked["warnings"].is_u64(), "{checked}");
+    assert!(checked["errors"].is_u64());
+    let blocks = query(&mut session, json!({"kind":"blocks"})).unwrap();
+    assert_eq!(blocks["count_scope"], qiyas_core::INSERT_COUNT_SCOPE);
+    assert_eq!(blocks["visibility_policy"], "as_shown");
+    let out = call(
+        &mut session,
+        surface::EXECUTE,
+        "view",
+        json!({"sheet":"Model","bounds":[[10,5],[0,0]]}),
+    )
+    .unwrap();
+    assert_eq!(out["sheet"], "*Model_Space");
+    assert_eq!(out["bounds"], json!([[0.0, 0.0], [10.0, 5.0]]));
+    assert_eq!(out["ui"]["action"], "zoom");
+    assert_eq!(out["ui"]["bounds"], out["bounds"]);
+    assert_eq!(out["ui"]["sheet"], out["sheet"]);
+    assert!(!session.can_undo());
+}
+
+#[test]
+fn generic_batch_rolls_back_the_guards_moved_from_named_tools() {
+    for source in [Source::Ai, Source::Mcp] {
+        let (_dir, mut session) = sample();
+        let error = output(
+            &mut session,
+            surface::EXECUTE,
+            "batch",
+            &json!({"commands":[
+                {"type":"measure_distance","points":[[100,100],[103,104]]},
+                {"type":"count_block","block_name":"MISSING"}
+            ]}),
+            source,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("MISSING"), "{error}");
+        assert!(session.takeoff.items.is_empty());
+        assert!(!session.can_undo());
+        assert_eq!(
+            surface::destructive_count(
+                surface::EXECUTE,
+                &json!({"op":"batch","args":{"commands":[
+                    {"type":"remove_measurement","id":"a"},
+                    {"type":"remove_measurement","id":"b"}
+                ]}})
+            ),
+            2
+        );
+    }
 }

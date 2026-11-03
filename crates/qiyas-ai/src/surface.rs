@@ -24,8 +24,9 @@ use serde_json::{json, Value};
 use qiyas_core::registry::{effect_of, registry, Effect};
 use qiyas_core::{Command, CoreError, Outcome, Session, Source};
 
-use crate::execute::{execute_full as execute, ToolError, ToolOutput};
+use crate::surface_io;
 use crate::tools::ToolSpec;
+use crate::{ToolError, ToolOutput};
 
 pub const READ: &str = "qiyas_read";
 pub const EXECUTE: &str = "qiyas_execute";
@@ -1284,7 +1285,7 @@ fn run_working_session(
                 .ok_or_else(|| bad("record_schema needs {name}"))?;
             json(qiyas_core::record_edit::record_schema(name)?)
         }
-        (READ, "query") => query(session, args, source),
+        (READ, "query") => query(session, args),
         (READ, "measure") => json(measure(session, args)?),
         (READ, "run") => {
             let (command, input) = prepare_command(session, &args["command"])?;
@@ -1303,15 +1304,16 @@ fn run_working_session(
             json(out)
         }
         (READ, "check") => {
-            let scope: qiyas_core::check::CheckScope = read_args(args, "check")?;
-            let Outcome::Checked { report } =
-                session.run_as(Command::CheckDrawing { scope }, source)?
-            else {
+            let reported =
+                session.run_input(&json!({"type":"check_drawing", "scope":args}), source)?;
+            let Outcome::Checked { report } = &reported.outcome else {
                 return Err(ToolError::Failed(
                     "The drawing check returned no report".into(),
                 ));
             };
-            json(json!(report))
+            let mut out = json!(report);
+            surface_io::append_metadata(&mut out, &reported);
+            json(out)
         }
         (READ, "events") => json(session.events_since(
             args["after"].as_u64().unwrap_or(0),
@@ -1322,14 +1324,15 @@ fn run_working_session(
             json(json!({ "undo": undo, "redo": redo }))
         }
         (READ, "rooms") => {
-            let query: qiyas_core::rooms::RoomsQuery = read_args(args, "rooms")?;
-            let Outcome::Rooms { report } = session.run_as(Command::Rooms { query }, source)?
-            else {
+            let reported = session.run_input(&json!({"type":"rooms", "query":args}), source)?;
+            let Outcome::Rooms { report } = &reported.outcome else {
                 return Err(ToolError::Failed(
                     "The room query returned no report".into(),
                 ));
             };
-            json(json!(report))
+            let mut out = json!(report);
+            surface_io::append_metadata(&mut out, &reported);
+            json(out)
         }
         (EXECUTE, "run") => {
             let (command, input) = prepare_command(session, &args["command"])?;
@@ -1427,9 +1430,12 @@ fn run_working_session(
             json(out)
         }
         (EXECUTE, "view") => {
-            if let Some(sheet) = args.get("sheet").and_then(Value::as_str) {
-                execute(session, "set_sheet", &json!({ "sheet": sheet }), source)?;
-            }
+            let reported = if let Some(sheet) = args.get("sheet").and_then(Value::as_str) {
+                let block = surface_io::sheet_block(session, Some(sheet))?;
+                Some(session.run_input(&json!({"type":"set_sheet", "block":block}), source)?)
+            } else {
+                None
+            };
             let mut zoom = json!({});
             for k in ["handles", "bounds"] {
                 if let Some(v) = args.get(k) {
@@ -1437,27 +1443,36 @@ fn run_working_session(
                 }
             }
             if zoom.as_object().is_some_and(|m| m.is_empty()) {
-                return json(
-                    json!({ "sheet": session.sheet, "ui": { "action": "show_sheet", "sheet": session.sheet } }),
-                );
+                let mut out = json!({ "sheet": session.sheet, "ui": { "action": "show_sheet", "sheet": session.sheet } });
+                if let Some(report) = &reported {
+                    surface_io::append_metadata(&mut out, report);
+                }
+                return json(out);
             }
-            let mut out = execute(session, "zoom_to", &zoom, source)?;
+            let mut out = ToolOutput::Json(crate::capture::view(session, &zoom)?);
             if args.get("sheet").and_then(Value::as_str).is_some() {
                 if let ToolOutput::Json(value) = &mut out {
                     value["sheet"] = json!(session.sheet);
                     value["ui"]["sheet"] = json!(session.sheet);
+                    if let Some(report) = &reported {
+                        surface_io::append_metadata(value, report);
+                    }
                 }
             }
             Ok(out)
         }
-        (EXECUTE, "import_boq") => execute(session, "import_boq", args, source),
-        (EXECUTE, "compare") => execute(session, "compare_boq", args, source),
+        (EXECUTE, "import_boq") => json(surface_io::import_boq(
+            session,
+            args["path"].as_str().unwrap(),
+            source,
+        )?),
+        (EXECUTE, "compare") => json(surface_io::compare(session, args, source)?),
         (EXECUTE, "export_takeoff") | (EXECUTE, "export_conflicts") => {
             json(export(session, op, args)?)
         }
         (EXECUTE, "export_evidence") => json(export_evidence(session, args)?),
         (EXECUTE, "plot") => json(plot(session, args)?),
-        (CAPTURE, "picture") => execute(session, "view_image", args, source),
+        (CAPTURE, "picture") => crate::capture::capture(session, args),
         _ => Err(bad(format!("{tool} has no op {op}"))),
     }
 }
@@ -1475,7 +1490,7 @@ fn state(session: &Session) -> Value {
         "units": info.units,
         "metres_per_unit": to_m,
         "text_height_2_5mm": if session.sheet.eq_ignore_ascii_case("*Model_Space") { 0.0025 / to_m * factor } else { 2.5 },
-        "sheet_units": crate::execute::sheet_units(session, &session.sheet),
+        "sheet_units": crate::surface_io::sheet_units(session, &session.sheet),
         "paper": info.paper,
         "annotation_scale": scale,
         "sheet": session.sheet,
@@ -1685,26 +1700,16 @@ fn read_handle_values(args: &Value) -> Value {
 
 /// `query`: entities near a point or in a window, one entity, texts, tables, dimensions,
 /// blocks, the boundary round a point, the layers.
-fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutput, ToolError> {
+fn query(session: &Session, args: &Value) -> Result<ToolOutput, ToolError> {
     let kind = args["kind"]
         .as_str()
         .ok_or_else(|| bad(format!("query needs {{kind}}: {}", QUERY_KINDS.join(", "))))?;
-    let mut rest = args.clone();
-    if let Some(map) = rest.as_object_mut() {
-        map.remove("kind");
-    }
-    let limit = rest
-        .as_object_mut()
-        .and_then(|o| o.remove("limit"))
-        .and_then(|v| v.as_u64());
+    let limit = args["limit"].as_u64();
     let within: Option<[[f64; 2]; 2]> = args
         .get("within")
         .filter(|v| !v.is_null())
         .map(|v| read_args(v, "query within"))
         .transpose()?;
-    if kind != "texts" {
-        rest.as_object_mut().unwrap().remove("within");
-    }
     let inside = |p: [f64; 2]| {
         within.is_none_or(|b| {
             (0..2).all(|i| p[i] >= b[0][i].min(b[1][i]) && p[i] <= b[0][i].max(b[1][i]))
@@ -1712,14 +1717,14 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
     };
     let page = |session: &Session, rows: Vec<Value>| {
         let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-        crate::execute::filtered_query_page(session, kind, args["sheet"].as_str(), rows, offset)
+        crate::surface_io::filtered_query_page(session, kind, args["sheet"].as_str(), rows, offset)
     };
     let result = match kind {
         "near" => {
             let p: [f64; 2] = read_args(&args["point"], "query near: point")?;
             let r = args["radius"]
                 .as_f64()
-                .unwrap_or(0.5 / crate::execute::sheet_metres_per_unit(session));
+                .unwrap_or(0.5 / crate::surface_io::sheet_metres_per_unit(session));
             let mut box_ = [[p[0] - r, p[1] - r], [p[0] + r, p[1] + r]];
             if let Some(b) = within {
                 for i in 0..2 {
@@ -1736,7 +1741,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
                     find[if k == "type" { "kind" } else { k }] = v.clone();
                 }
             }
-            execute(session, "find_entities", &find, source)
+            Ok(ToolOutput::Json(surface_io::entities(session, &find)?))
         }
         "window" => {
             let mut find = json!({ "within": within });
@@ -1745,7 +1750,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
                     find[if k == "type" { "kind" } else { k }] = v.clone();
                 }
             }
-            execute(session, "find_entities", &find, source)
+            Ok(ToolOutput::Json(surface_io::entities(session, &find)?))
         }
         "entity" => {
             let handle = args["handle"].as_u64().unwrap();
@@ -1761,10 +1766,23 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
             {
                 Ok(ToolOutput::Json(json!({"entity":null,"matched":false})))
             } else {
-                execute(session, "get_entity", &rest, source)
+                Ok(ToolOutput::Json(
+                    json!({"entity": session.entity_info(handle, &chain)?, "units": surface_io::units(session)}),
+                ))
             }
         }
-        "texts" => execute(session, "read_text", &rest, source),
+        "texts" => {
+            let block = surface_io::sheet_block(session, args["sheet"].as_str())?;
+            let mut rows = session.read_text(Some(&block), within);
+            if let Some(layer) = args["layer"].as_str() {
+                rows.retain(|row| row.layer.eq_ignore_ascii_case(layer));
+            }
+            Ok(ToolOutput::Json(surface_io::with_units(
+                session,
+                &block,
+                surface_io::page(rows, args["offset"].as_u64().unwrap_or(0) as usize),
+            )))
+        }
         "tables" if within.is_some() => page(
             session,
             session
@@ -1813,16 +1831,45 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
                     .collect(),
             )
         }
-        "tables" => execute(session, "read_tables", &rest, source),
-        "dimensions" => execute(session, "read_dimensions", &rest, source),
-        "blocks" => execute(session, "block_summary", &rest, source),
-        "layers" => execute(session, "list_layers", &rest, source),
+        "tables" => {
+            let block = surface_io::sheet_block(session, args["sheet"].as_str())?;
+            let out = surface_io::page(
+                session.read_tables(Some(&block)),
+                args["offset"].as_u64().unwrap_or(0) as usize,
+            );
+
+            Ok(ToolOutput::Json(out))
+        }
+        "dimensions" => {
+            let block = surface_io::sheet_block(session, args["sheet"].as_str())?;
+            let mut out = surface_io::page(
+                session.read_dimensions(Some(&block)),
+                args["offset"].as_u64().unwrap_or(0) as usize,
+            );
+            out = surface_io::with_units(session, &block, out);
+            Ok(ToolOutput::Json(out))
+        }
+        "blocks" => {
+            let block = surface_io::sheet_block(session, args["sheet"].as_str())?;
+            let mut out = surface_io::page(
+                session.block_summary(Some(&block)),
+                args["offset"].as_u64().unwrap_or(0) as usize,
+            );
+            out["count_scope"] = json!(qiyas_core::INSERT_COUNT_SCOPE);
+            out["visibility_policy"] = json!("as_shown");
+            out["limitations"] = json!(qiyas_core::INSERT_COUNT_LIMITATIONS);
+            Ok(ToolOutput::Json(out))
+        }
+        "layers" => Ok(ToolOutput::Json(surface_io::layers(
+            session,
+            args["offset"].as_u64().unwrap_or(0) as usize,
+        ))),
         "boundary" => {
             let p: [f64; 2] = read_args(&args["point"], "query boundary: point")?;
             if !inside(p) {
                 return Ok(ToolOutput::Json(json!({"ring":null,"matched":false})));
             }
-            let to_m = crate::execute::sheet_metres_per_unit(session);
+            let to_m = crate::surface_io::sheet_metres_per_unit(session);
             match session.boundary_at(p, 1.0 / to_m) {
                 qiyas_core::Boundary::Ring {
                     ring,
@@ -1877,7 +1924,7 @@ fn query(session: &mut Session, args: &Value, source: Source) -> Result<ToolOutp
 
 /// `measure`: the length and area of an entity or of points, in metres, without a take-off row.
 fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
-    let to_m = crate::execute::sheet_metres_per_unit(session);
+    let to_m = crate::surface_io::sheet_metres_per_unit(session);
     if let Some(handle) = args.get("handle") {
         let h = handle
             .as_u64()
@@ -2195,7 +2242,7 @@ fn resolve_paths(session: &Session, value: &mut Value) -> Result<(), ToolError> 
     if let Some(map) = value.as_object_mut() {
         for (key, value) in map {
             if (key == "path" || key.ends_with("_path")) && value.is_string() {
-                let full = crate::execute::resolve_in_drawing_folder(
+                let full = crate::surface_io::resolve_in_drawing_folder(
                     session,
                     value.as_str().unwrap_or_default(),
                 )?;
@@ -2791,7 +2838,7 @@ fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
     // The same confinement as the exports (symlinks resolved); a subfolder is made for it.
     let output = match args.get("path").and_then(Value::as_str) {
         Some(name) => {
-            let full = crate::execute::resolve_in_drawing_folder(session, name)?;
+            let full = crate::surface_io::resolve_in_drawing_folder(session, name)?;
             if let Some(parent) = full.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| failed(e.to_string()))?;
             }
@@ -2853,7 +2900,7 @@ fn export(session: &mut Session, op: &str, args: &Value) -> Result<Value, ToolEr
     } else {
         name.into()
     };
-    let path = crate::execute::resolve_in_drawing_folder(session, &file.to_string_lossy())?;
+    let path = crate::surface_io::resolve_in_drawing_folder(session, &file.to_string_lossy())?;
     let mut out = if op == "export_takeoff" {
         let totals = session.takeoff.totals();
         let report = session
@@ -2909,7 +2956,7 @@ fn export_evidence(session: &mut Session, args: &Value) -> Result<Value, ToolErr
     } else {
         path
     };
-    let path = crate::execute::resolve_in_drawing_folder(session, &path.to_string_lossy())?;
+    let path = crate::surface_io::resolve_in_drawing_folder(session, &path.to_string_lossy())?;
     let snapshot =
         qiyas_plot::evidence::snapshot(session, language).map_err(|e| bad(e.to_string()))?;
     let output = qiyas_plot::evidence::write(&snapshot, &path).map_err(|e| bad(e.to_string()))?;

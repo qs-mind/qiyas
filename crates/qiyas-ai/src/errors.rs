@@ -87,7 +87,7 @@ pub fn message(text: &str) -> String {
 mod tests {
     #[test]
     fn contradictory_values_are_not_reported_as_missing_fields() {
-        let error = crate::execute::ToolError::BadInput(
+        let error = crate::ToolError::BadInput(
             "An opening needs 0 <= sill < head <= wall height, in metres".into(),
         );
         assert_eq!(error.json()["code"], "invalid_value");

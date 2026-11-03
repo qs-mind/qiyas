@@ -9,7 +9,7 @@ use std::fmt::Write;
 use qiyas_core::{Session, Target};
 use serde::{Deserialize, Serialize};
 
-use crate::execute::Look;
+use crate::capture::Look;
 use crate::prompt::Lang;
 
 /// Most entities listed one by one; the rest are counted by kind.
@@ -322,7 +322,7 @@ pub(crate) fn picture(session: &Session, ctx: &TurnContext) -> Option<(Vec<u8>, 
         region: &ring,
         marks: true,
     };
-    crate::execute::picture(session, &look).ok()
+    crate::capture::picture(session, &look).ok()
 }
 
 /// The ends of every segment the sheet on screen draws for the entities `tops`.

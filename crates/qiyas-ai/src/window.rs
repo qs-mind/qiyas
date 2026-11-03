@@ -8,8 +8,8 @@ use std::sync::{Mutex, PoisonError};
 use qiyas_core::{Session, Target};
 use serde_json::{json, Value};
 
+use crate::capture::{marks_legend, text_note};
 use crate::context::{describe, TurnContext};
-use crate::execute::{marks_legend, text_note};
 use crate::host::DrawingHost;
 use crate::image::mark_screen;
 use crate::prompt::Lang;
@@ -107,7 +107,7 @@ fn view_screen(
         lo[1],
         hi[0],
         hi[1],
-        crate::execute::sheet_units(s, &s.sheet),
+        crate::surface_io::sheet_units(s, &s.sheet),
     );
     caption.push_str(&text_note(drawn.text));
     caption.push_str(&marks_legend(s, &drawn.marks));
