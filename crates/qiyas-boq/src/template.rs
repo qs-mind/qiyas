@@ -223,11 +223,12 @@ pub fn write(path: &Path, report: &Report) -> Result<(), String> {
     let mut writer = zip::ZipWriter::new(std::fs::File::create(path).map_err(|e| e.to_string())?);
     for i in 0..archive.len() {
         let entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        if let Some(xml) = replacements.get(entry.name()) {
+        let name = entry.name().map_err(|e| e.to_string())?.into_owned();
+        if let Some(xml) = replacements.get(&name) {
             let options =
                 zip::write::SimpleFileOptions::default().compression_method(entry.compression());
             writer
-                .start_file(entry.name(), options)
+                .start_file(name, options)
                 .map_err(|e| e.to_string())?;
             writer
                 .write_all(xml.as_bytes())
@@ -250,7 +251,8 @@ pub(crate) fn page_setup(
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        if entry.name() == "xl/worksheets/sheet1.xml" {
+        let name = entry.name().map_err(|e| e.to_string())?.into_owned();
+        if name == "xl/worksheets/sheet1.xml" {
             let mut xml = String::new();
             entry.read_to_string(&mut xml).map_err(|e| e.to_string())?;
             let setup = format!(
@@ -261,7 +263,7 @@ pub(crate) fn page_setup(
             let xml = xml.replace("paperSize=\"9\"", &setup);
             writer
                 .start_file(
-                    entry.name(),
+                    name,
                     zip::write::SimpleFileOptions::default()
                         .compression_method(entry.compression()),
                 )

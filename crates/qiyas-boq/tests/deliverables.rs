@@ -104,7 +104,7 @@ fn entries(path: &Path) -> BTreeMap<String, Vec<u8>> {
     (0..archive.len())
         .map(|i| {
             let mut e = archive.by_index(i).unwrap();
-            let name = e.name().into();
+            let name = e.name().unwrap().into_owned();
             let mut data = vec![];
             e.read_to_end(&mut data).unwrap();
             (name, data)

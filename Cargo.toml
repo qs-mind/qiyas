@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*"] # Includes qiyas-ocr.
-exclude = ["fuzz"]
+exclude = ["fuzz", "vendor/oar-ocr"]
 resolver = "2"
 
 [workspace.package]
@@ -31,8 +31,8 @@ geo = { version = "=0.33.1", default-features = false }
 robust = { version = "=1.2.0", default-features = false }
 clipper2-rust = { version = "=1.2.0", default-features = false }
 kurbo = { version = "=0.13.1", default-features = false, features = ["std"] }
-rust_xlsxwriter = "0.99"
-calamine = "0.36"
+rust_xlsxwriter = "0.102"
+calamine = "0.38"
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting"] }
@@ -76,3 +76,9 @@ codegen-units = 1
 
 [profile.release.package.qiyas-render]
 codegen-units = 1
+
+# oar-ocr 0.10.2 as published, with only its zip raised from 8.6 to 9.0.5: zip before 9.0.5 has
+# security advisories, and oar-ocr reads one model archive with it. Remove this patch and
+# vendor/oar-ocr once an oar-ocr release depends on zip 9.0.5 or later.
+[patch.crates-io]
+oar-ocr = { path = "vendor/oar-ocr" }
