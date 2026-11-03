@@ -1,5 +1,5 @@
 Take-off workflow:
-The goal is a complete, traceable take-off of the engineer's scope. Every quantity leads back to drawing elements, a measurement rule and the source of each value. Use the expert frame and decision register from the main principles. Do not turn a drawing-only request into a quantity job.
+The goal is a complete, traceable take-off of the engineer's scope. Every quantity leads back to drawing elements, a measurement rule and the source of each value. Use the quantity decision register from the main principles. Do not turn a drawing-only request into a quantity job.
 
 Read raw geometry, properties, notes, legends, schedules and the engineer's documents. A blank scan reading is not evidence of empty scope. Establish units, scale and scope from evidence. Plan meaningful phases and read back their results. Recognition candidates and coverage percentages alone do not prove completeness.
 

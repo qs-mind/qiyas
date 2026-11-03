@@ -75,14 +75,9 @@ pub(crate) fn validate_checks(value: &Value) -> Result<Vec<Rule>, CoreError> {
     Ok(rules)
 }
 
-pub fn shipped_pack(name: &str) -> Result<Value, CoreError> {
-    match name {
-        "interiors" => serde_json::from_str(include_str!("../data/interiors-pack.json"))
-            .map_err(|e| invalid(e.to_string())),
-        _ => Err(invalid(
-            "Unknown object pack. Available: interiors. Or supply your own pack data.",
-        )),
-    }
+/// Retained for old command transcripts; new packs are authored and supplied as data.
+pub fn shipped_pack(_name: &str) -> Result<Value, CoreError> {
+    Err(invalid("No built-in object packs; supply pack data."))
 }
 
 impl Session {

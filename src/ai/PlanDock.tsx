@@ -15,7 +15,7 @@ const complete = (plan: Plan) => plan.phases.every((phase) => phase.status === "
 export function latestDockPlan(items: Item[]) {
   const index = items.map((item) => item.kind).lastIndexOf("plan");
   const plan = items[index];
-  if (plan?.kind !== "plan" || (plan.phases.length < 2 && !plan.frame)) return null;
+  if (plan?.kind !== "plan" || plan.phases.length < 2) return null;
   const answered = items.slice(index + 1).some((item) => item.kind === "user");
   if (answered && complete(plan)) return null;
   return { index, plan, awaitingApproval: !!plan.awaitingApproval && !answered };
@@ -34,7 +34,7 @@ type Props = {
 };
 
 export function PlanDock(props: Props) {
-  if (!props.plan || (props.plan.phases.length < 2 && !props.plan.frame)) return null;
+  if (!props.plan || props.plan.phases.length < 2) return null;
   return <Dock {...props} plan={props.plan} />;
 }
 

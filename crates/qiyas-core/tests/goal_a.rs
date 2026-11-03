@@ -416,15 +416,83 @@ mod mizan_tools {
         }
     }
 
+    /// Authored for this airport test; no product library or regulatory defaults.
+    fn terminal_service_pack() -> Value {
+        let number = |value: f64, minimum: f64| json!({"kind":"number","unit":"length","default":value,"min":minimum});
+        let body = json!({"kind":"polyline","closed":true,"points":[
+            ["=-width/2/unit",0],["=width/2/unit",0],
+            ["=width/2/unit","=if(side == 'left', 1, -1)*depth/unit"],
+            ["=-width/2/unit","=if(side == 'left', 1, -1)*depth/unit"]
+        ]});
+        let types: Vec<_> = [("Terminal service unit", 0.45), ("Terminal service cabinet", 0.65)]
+            .into_iter().map(|(name, width)| json!({
+                "name":name,"category":"Fixture","geometry":"hosted",
+                "properties":{
+                    "width":number(width,0.001),"depth":number(0.7,0.001),
+                    "distance":number(1.,0.),"back_gap":number(0.,0.),
+                    "clear_width":number(0.8,0.001),"clear_depth":number(1.2,0.001),
+                    "host_width":number(0.,0.),
+                    "side":{"kind":"choice","default":"left","choices":["left","right"]}
+                },
+                "property_bindings":{"host_width":"host.band_width"},
+                "host_cut":{"cuts_host":false,"width":"width","at":"distance",
+                    "offset_normal":"if(side == 'left', 1, -1) * (host_width/2 + back_gap)"},
+                "plan":{"symbols":[body.clone()],"zones":{
+                    "body":[body.clone()],
+                    "back":[{"kind":"line","a":["=-width/2/unit",0],"b":["=width/2/unit",0]}],
+                    "clearance":[{"kind":"polyline","closed":true,"points":[
+                        ["=-clear_width/2/unit","=if(side == 'left', 1, -1)*depth/unit"],
+                        ["=clear_width/2/unit","=if(side == 'left', 1, -1)*depth/unit"],
+                        ["=clear_width/2/unit","=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"],
+                        ["=-clear_width/2/unit","=if(side == 'left', 1, -1)*(depth+clear_depth)/unit"]
+                    ]}]
+                }},"quantities":{"pieces":"count"}
+            })).collect();
+        json!({
+            "name":"Airport service coordination test","citations":["Synthetic airport test brief"],
+            "types":types,
+            "zones_for_types":{"Legacy door":{"swing":[{"kind":"polyline","closed":true,
+                "points":[[0,0],["=width/unit",0],[0,"=width/unit"]],
+                "bulges":[0,0.41421356237309503,0]}]}},
+            "checks":[
+                {"name":"Host contact","citation":"Airport test contact rule","zone":"back",
+                    "relation":"touch_host","tolerance_m":0.001},
+                {"name":"Service access","citation":"Airport test access rule","zone":"clearance",
+                    "relation":"disjoint","tolerance_m":0.001,"against_zones":["body"],
+                    "against_entities":["Line","LwPolyline","Circle","Arc"]},
+                {"name":"Door swing clearance","citation":"Airport test swing rule","zone":"swing",
+                    "relation":"disjoint","tolerance_m":0.001,"against_zones":["body","clearance"]}
+            ]
+        })
+    }
+
+    #[test]
+    fn no_builtin_pack_names_install_or_advertise_fixed_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("airport-pack.dxf"), 4);
+        let before = s.revision();
+        for name in ["interiors", "unknown-pack"] {
+            for command in ["read_object_pack", "install_object_pack"] {
+                let error = s
+                    .run_input(&json!({"type":command,"name":name}), Source::Mcp)
+                    .unwrap_err();
+                assert!(error.to_string().contains("supply pack data"), "{error}");
+                assert!(!error.to_string().contains("Available: interiors"));
+                assert_eq!(s.revision(), before);
+            }
+        }
+    }
+
     #[test]
     fn fixture_pack_values_drive_contact_clearance_and_host_motion_without_a_cut() {
         for units in [4, 5, 6, 1] {
             let dir = tempfile::tempdir().unwrap();
-            let mut s = Session::new_blank(&dir.path().join("fixtures.dxf"), units);
+            let mut s =
+                Session::new_blank(&dir.path().join("airport-concourse-fixtures.dxf"), units);
             let k = 1. / s.drawing.units.to_metres();
             let Outcome::Walls { result } = run(
                 &mut s,
-                json!({"type":"walls","runs":[{"points":[[0,0],[6.*k,0]]}],"thickness":0.2*k}),
+                json!({"type":"walls","runs":[{"points":[[0,0],[600.*k,0]]}],"thickness":0.2*k}),
             ) else {
                 panic!("wall")
             };
@@ -436,7 +504,7 @@ mod mizan_tools {
                 .find(|o| o.instance.id == host)
                 .unwrap()
                 .quantities;
-            let mut pack = qiyas_core::placement_pack::shipped_pack("interiors").unwrap();
+            let mut pack = terminal_service_pack();
             pack["types"][0]["name"] = json!("Test specimen");
             pack["types"][0]["properties"]["width"]["default"] = json!(0.47);
             for (i, rule) in pack["checks"]
@@ -527,9 +595,9 @@ mod mizan_tools {
     #[test]
     fn optional_pack_install_is_atomic_editable_and_one_undo_step() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Session::new_blank(&dir.path().join("pack.dxf"), 4);
+        let mut s = Session::new_blank(&dir.path().join("airport-pack.dxf"), 4);
         let before = s.revision();
-        let mut broken = qiyas_core::placement_pack::shipped_pack("interiors").unwrap();
+        let mut broken = terminal_service_pack();
         broken["types"][1]["properties"]["width"]["default"] = json!(-1);
         assert!(s
             .run_input(
@@ -542,14 +610,22 @@ mod mizan_tools {
             before,
             "a later invalid type restores earlier type writes too"
         );
-        assert!(!s.object_types().unwrap().iter().any(|t| t.name == "WC"));
+        assert!(!s
+            .object_types()
+            .unwrap()
+            .iter()
+            .any(|t| t.name == "Terminal service unit"));
         let count = s.history_steps().0.len();
         run(
             &mut s,
-            json!({"type":"install_object_pack","name":"interiors"}),
+            json!({"type":"install_object_pack","data":terminal_service_pack()}),
         );
         assert_eq!(s.history_steps().0.len(), count + 1);
-        assert!(s.object_types().unwrap().iter().any(|t| t.name == "WC"));
+        assert!(s
+            .object_types()
+            .unwrap()
+            .iter()
+            .any(|t| t.name == "Terminal service unit"));
         let records = s
             .records(&qiyas_core::records::RecordQuery {
                 collection: qiyas_core::records::Collection::KnowledgePlacement,
@@ -558,20 +634,28 @@ mod mizan_tools {
             .unwrap();
         assert_eq!(records.total, 1);
         assert!(s.undo());
-        assert!(!s.object_types().unwrap().iter().any(|t| t.name == "WC"));
+        assert!(!s
+            .object_types()
+            .unwrap()
+            .iter()
+            .any(|t| t.name == "Terminal service unit"));
         assert!(s.redo());
-        assert!(s.object_types().unwrap().iter().any(|t| t.name == "WC"));
+        assert!(s
+            .object_types()
+            .unwrap()
+            .iter()
+            .any(|t| t.name == "Terminal service unit"));
     }
 
     #[test]
     fn analytic_door_sector_checks_clearance_even_when_the_fixture_body_is_clear() {
         for units in [4, 5, 6, 1] {
             let dir = tempfile::tempdir().unwrap();
-            let mut s = Session::new_blank(&dir.path().join("swing.dxf"), units);
+            let mut s = Session::new_blank(&dir.path().join("airport-concourse-swing.dxf"), units);
             let k = 1. / s.drawing.units.to_metres();
             let Outcome::Walls { result } = run(
                 &mut s,
-                json!({"type":"walls","runs":[{"points":[[0,0],[6.*k,0]]}],"thickness":0.2*k,
+                json!({"type":"walls","runs":[{"points":[[0,0],[600.*k,0]]}],"thickness":0.2*k,
             "openings":[{"run":0,"at":3.*k,"width":0.9*k,"kind":"door"}]}),
             ) else {
                 panic!("wall")
@@ -579,11 +663,11 @@ mod mizan_tools {
             let host = result.centrelines[0];
             run(
                 &mut s,
-                json!({"type":"install_object_pack","name":"interiors"}),
+                json!({"type":"install_object_pack","data":terminal_service_pack()}),
             );
             let fixture = added(
                 &mut s,
-                json!({"type":"place_objects","objects":[{"type":"WC","host":host,"props":{"distance":3.9,"clear_width":2.}}]}),
+                json!({"type":"place_objects","objects":[{"type":"Terminal service unit","host":host,"props":{"distance":3.9,"clear_width":2.}}]}),
             );
             let scope = qiyas_core::check::CheckScope {
                 rules: vec!["placement".into()],
@@ -600,7 +684,7 @@ mod mizan_tools {
             );
             run(
                 &mut s,
-                json!({"type":"set_object_props","targets":[fixture],"props":{"clear_width":0.762}}),
+                json!({"type":"set_object_props","targets":[fixture],"props":{"clear_width":0.8}}),
             );
             assert!(s.check_drawing(&scope).findings.is_empty());
         }

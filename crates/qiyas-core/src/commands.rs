@@ -1321,15 +1321,15 @@ pub enum Command {
         #[serde(default)]
         target: Option<Target>,
     },
-    /// Reads an optional editable object/check pack, including its citations. Available: interiors.
-    /// No types or checks are installed until install_object_pack is called.
+    /// Reads authored pack data installed in this drawing with install_object_pack.
+    /// No built-in packs are supplied; name an installed pack.
     #[schemars(extend("x-category" = "inquiry"))]
-    #[schemars(example = json!({"type":"read_object_pack","name":"interiors"}))]
+    #[schemars(example = json!({"type":"read_object_pack","name":"Project coordination"}))]
     ReadObjectPack { name: String },
-    /// Installs an optional pack as one undo step. Supply name for a shipped pack or data for
-    /// an edited pack. Values and checks are drawing-owned data; no compliance is implied.
+    /// Installs authored pack data as one undo step; no built-in packs are supplied.
+    /// Values, checks and citations belong to this drawing; no compliance is implied.
     #[schemars(extend("x-category" = "objects"))]
-    #[schemars(example = json!({"type":"install_object_pack","name":"interiors"}))]
+    #[schemars(example = json!({"type":"install_object_pack","data":{"name":"Project coordination","citations":["Engineer project brief"],"types":[],"checks":[{"name":"Service access","citation":"Engineer project brief","zone":"access","relation":"disjoint","tolerance_m":0.001,"against_zones":["body"]}]}}))]
     InstallObjectPack {
         #[serde(default)]
         name: Option<String>,
@@ -3224,7 +3224,17 @@ impl Session {
             }
             Command::ReadObjectPack { name } => {
                 return Ok(Outcome::ObjectPack {
-                    data: crate::placement_pack::shipped_pack(&name)?,
+                    data: crate::knowledge::get(
+                        &self.drawing.doc,
+                        crate::knowledge::Kind::Mappings,
+                        &format!("pack:{name}"),
+                    )?
+                    .ok_or_else(|| {
+                        invalid(&format!(
+                            "No object pack {name} is installed in this drawing; supply pack data with install_object_pack."
+                        ))
+                    })?
+                    .data,
                 });
             }
             Command::ObjectZones { targets } => {

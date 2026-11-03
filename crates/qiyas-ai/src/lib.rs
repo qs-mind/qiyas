@@ -80,3 +80,6 @@ mod brief_check;
 mod cache_replay;
 
 pub mod progress;
+
+#[cfg(test)]
+mod drawing_kit_tests;

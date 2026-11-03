@@ -1,0 +1,46 @@
+Drawing kit: schemas + examples.
+N=finite number; U=nonnegative integer; S=string; B=boolean; J=JSON; P=[N,N]; V={x:N,y:N,z:N}; Box=[P,P]; X[]=array; ?=optional. Names fix type/kind. Angles are degrees, coordinates drawing units; wall height/sill/head are metres. State gives units/annotation_scale. Text height 0 selects 2.5mm on paper. Defaults are not brief facts.
+Shared edit/batch field: sheet?:S (target sheet; omit for working sheet).
+T={handle:U,chain?:U[]}; Map={string:S}; R={rev:S,date:S,description:S}; Fill="solid"|"ansi31"|"ansi37"|{custom:{name:S,angle?:N,scale?:N}}; O={at:N,width:N,kind:"door"|"window",swing?:"left"|"right",sill?:N,head?:N}; Run={points:P[],closed?:B,thickness?:N,height?:N,justification?:"centre"|"left"|"right"}; Layers={outline?:S,hatch?:S,centreline?:S,doors?:S,windows?:S}; Zones={plans:Box,notes:Box,schedules:Box,key_plan:Box}.
+Collections: `entities|layers|linetypes|text_styles|dim_styles|blocks|layouts|viewports|groups|views|header|layer_states|xrefs|takeoff|boq|conflicts|schedules|comments|constraints|parameters|object_types|objects|knowledge_types|knowledge_levels|knowledge_tables|knowledge_rules|knowledge_sheets|knowledge_mappings|knowledge_views|knowledge_measurement|knowledge_checks|knowledge_queries|knowledge_reports|knowledge_placement`.
+Use qiyas_execute {op:"run",args:JSON-string({command:<example>,layer?:S,color?:S}),expected_revision:<latest revision or null>}; batch args omits type. Blocks carry their own units; insert_block converts to drawing units. Block bounds are conservative plan boxes; bounds_complete:false means no reliable size. Color is "ByLayer", "ACI 4" or "#336699", never a number. Max200 batch steps; references {"$step":0,"pointer":"/added/0"} use earlier results. Use measured handles, not example IDs. For reads use qiyas_read {op:"run",args:JSON-string({command:<records example>})}, or op:"records" with its query directly. Collection blocks lists size_m/bounds_m, base_point, attribute_tags, insert_count (stored references); filter layout:false for components. Read blocks before drawing; define once, insert/array. from_path needs an engineer-named drawing.
+draw.line{a:P,b:P} => {"type":"draw","kind":"line","a":[0,0],"b":[1,1]}
+draw.rectangle{a:P,b:P} => {"type":"draw","kind":"rectangle","a":[0,0],"b":[1,1]}
+draw.polyline{points:P[],bulges?:N[],closed?:B} => {"type":"draw","kind":"polyline","points":[[0,0],[1,0],[1,1]],"closed":true}
+draw.polygon{centre:P,sides:U,radius:N,inscribed?:B} => {"type":"draw","kind":"polygon","centre":[0,0],"sides":6,"radius":1}
+draw.circle{centre:P,radius:N} => {"type":"draw","kind":"circle","centre":[0,0],"radius":1}
+draw.arc{centre:P,radius:N,start:N,end:N} => {"type":"draw","kind":"arc","centre":[0,0],"radius":1,"start":0,"end":90}
+draw.three_point_arc{a:P,b:P,c:P} => {"type":"draw","kind":"three_point_arc","a":[0,0],"b":[1,1],"c":[2,0]}
+draw.ellipse{centre:P,major:P,ratio:N} => {"type":"draw","kind":"ellipse","centre":[0,0],"major":[1,0],"ratio":0.5}
+draw.spline{fit_points:P[]} => {"type":"draw","kind":"spline","fit_points":[[0,0],[1,1],[2,0]]}
+draw.point{p:P} => {"type":"draw","kind":"point","p":[0,0]}
+draw.donut{centre:P,inner:N,outer:N} => {"type":"draw","kind":"donut","centre":[0,0],"inner":0.1,"outer":0.2}
+draw.ray{origin:P,dir:P} => {"type":"draw","kind":"ray","origin":[0,0],"dir":[1,0]}
+draw.xline{origin:P,dir:P} => {"type":"draw","kind":"xline","origin":[0,0],"dir":[1,0]}
+draw.revcloud{points:P[],arc_len?:N} => {"type":"draw","kind":"revcloud","points":[[0,0],[1,0],[1,1],[0,1]]}
+draw.wipeout{points:P[]} => {"type":"draw","kind":"wipeout","points":[[0,0],[1,0],[1,1]]}
+draw.hatch{boundary_handles?:U[],points?:P[],holes?:P[][],bulges?:N[][],pattern?:Fill} => {"type":"draw","kind":"hatch","points":[[0,0],[1,0],[1,1],[0,1]],"pattern":{"custom":{"name":"ANSI31","angle":0,"scale":1}}}
+draw.solid2d{points:P[]} => {"type":"draw","kind":"solid2d","points":[[0,0],[1,0],[0,1]]}
+draw.trace{points:P[],width:N} => {"type":"draw","kind":"trace","points":[[0,0],[1,0]],"width":0.1}
+draw.mline{points:P[],style?:S,scale?:N} => {"type":"draw","kind":"mline","points":[[0,0],[1,0]]}
+draw.sketch{points:P[]} => {"type":"draw","kind":"sketch","points":[[0,0],[1,0],[2,1]]}
+batch{commands:J[],layer?:S,color?:S} => {"type":"batch","layer":"A-DETAIL","color":"ByLayer","commands":[{"type":"draw","kind":"line","a":[0,0],"b":[1,0]}]}
+text{at:P,height?:N,rotation?:N,value:S,style?:S} => {"type":"text","at":[0,0],"height":0.25,"value":"Terminal concourse"}
+mtext{at:P,width?:N,height?:N,value:S,style?:S} => {"type":"mtext","at":[0,0],"width":10,"height":0.25,"value":"Terminal\nFor review"}
+dimension.linear{p1:P,p2:P,line_point:P,rotation?:N} => {"type":"dimension","kind":"linear","p1":[0,0],"p2":[600,0],"line_point":[300,-5]}
+dimension.aligned{p1:P,p2:P,offset:N} => {"type":"dimension","kind":"aligned","p1":[0,0],"p2":[30,40],"offset":2}
+walls{runs:Run[],thickness:N,justification?:"centre"|"left"|"right",openings?:({run:U}+O)[],height?:N,layers?:Layers,join?:B} => {"type":"walls","runs":[{"points":[[0,0],[600,0]]}],"thickness":0.3,"height":6}
+add_wall_openings{centreline:U,openings:O[]} => {"type":"add_wall_openings","centreline":1234,"openings":[{"at":3,"width":1.2,"kind":"door","head":2.4,"sill":0}]}
+define_block{name:S,base:P,entities:{type:S,data?:J}[]} => {"type":"define_block","name":"Detail","base":[0,0],"entities":[{"type":"Line","data":{"start":{"x":0,"y":0,"z":0},"end":{"x":1,"y":0,"z":0}}}]}
+insert_block{name:S,at:P,scale?:N,rotation?:N,attribute_values?:Map,from_path?:S} => {"type":"insert_block","name":"Detail","at":[12,18],"scale":1,"rotation":90,"attribute_values":{}}
+edit_block_in_place{target:T} => {"type":"edit_block_in_place","target":{"handle":1234}}
+save_block_edits{} => {"type":"save_block_edits"}
+modify.move{targets:T[],delta:P} => {"type":"modify","kind":"move","targets":[{"handle":1234}],"delta":[3,0]}
+modify.copy{targets:T[],delta:P,count:U} => {"type":"modify","kind":"copy","targets":[{"handle":1234}],"delta":[3,0],"count":10}
+modify.array_rect{targets:T[],rows:U,cols:U,dy:N,dx:N} => {"type":"modify","kind":"array_rect","targets":[{"handle":1234}],"rows":20,"cols":50,"dy":3,"dx":3}
+modify.array_polar{targets:T[],centre:P,count:U,angle:N} => {"type":"modify","kind":"array_polar","targets":[{"handle":1234}],"centre":[0,0],"count":12,"angle":30}
+make_sheet{name:S,paper?:S,orientation?:"portrait"|"landscape",scale?:S,model_bounds?:Box,language?:"en"|"ar",project?:S,title?:S,drawing_no?:S,client?:S,consultant?:S,project_no?:S,checked_by?:S,approved_by?:S,revision_table?:R[],split_lines?:Box[],core_regions?:P[][],zones?:Zones,date?:S,drawn_by?:S,revision?:S,status?:S,notes?:S[],scale_bar?:B} => {"type":"make_sheet","name":"A-101 Terminal","title":"Terminal concourse","drawing_no":"A-101","language":"en"}
+title_block{fields:Map,revision_table?:R[],language?:"en"|"ar",margin_mm?:N,binding_mm?:N,layer?:S} => {"type":"title_block","fields":{"title":"Terminal concourse","drawing_no":"A-101"},"language":"en"}
+set_property{target:T,prop:"layer"|"color"|"linetype"|"lineweight"|"text"|"text_height"|"text_rotation"|"text_style"|"radius"|"closed"|"global_width"|"insert_scale"|"insert_rotation"|"dim_style"|"viewport_scale"|"viewport_centre",value:J} => {"type":"set_property","target":{"handle":1234},"prop":"layer","value":"A-DETAIL"}
+records{query:{collection?:Collections,handles?:U[],names?:S[],type?:S,layer?:S,sheet?:S,block?:S,bounds?:Box,where?:{path:S,op?:"eq"|"ne"|"in"|"not_in"|"lt"|"le"|"gt"|"ge"|"contains"|"exists",value?:J}[],fields?:S[],detail?:"summary"|"full",offset?:U,limit?:U}} => {"type":"records","query":{"collection":"blocks","where":[{"path":"layout","value":false}],"limit":20}}
+Geometry: radius/width/scale>0; ellipse 0<ratio<=1; polygon 3..1024 sides; paths >=2 points, closed boundaries >=3; solid2d 3..4 points. Hatch uses points or boundary_handles, not both. Copy count>=1; arrays >=2 cells. Block data uses record shapes: a Line needs start/end V (not a/b); base is the insertion anchor.

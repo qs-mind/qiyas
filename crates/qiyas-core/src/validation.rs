@@ -739,7 +739,7 @@ fn input_schema(
                     _ if shared.is_empty() => out.warnings.push(InputIssue {
                         code: "unknown_field".into(),
                         pointer: pointer(path, key),
-                        message: format!("Unknown field {key}; it is ignored"),
+                        message: unknown_field_message(key, &known),
                     }),
                     _ => {}
                 }
@@ -812,6 +812,22 @@ fn branch_rank(
     warnings: usize,
 ) -> (usize, std::cmp::Reverse<usize>, usize, usize) {
     let (mut mismatches, mut matches) = (0, 0);
+    let matches_type = |kind: &str| match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => true,
+    };
+    let wrong_type = match &schema["type"] {
+        Value::String(kind) => !matches_type(kind),
+        Value::Array(kinds) => !kinds.iter().filter_map(Value::as_str).any(matches_type),
+        _ => false,
+    };
+    mismatches += usize::from(wrong_type);
     if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
         for (key, sub) in properties {
             if let Some(constant) = sub.get("const") {
@@ -826,6 +842,22 @@ fn branch_rank(
         }
     }
     (mismatches, std::cmp::Reverse(matches), errors, warnings)
+}
+
+fn unknown_field_message(key: &str, known: &[String]) -> String {
+    let replacement = match key {
+        "property" => "prop",
+        "targets" => "target",
+        "target" => "targets",
+        "source" => "field",
+        _ => "",
+    };
+    let hint = if known.iter().any(|field| field == replacement) {
+        format!(". Did you mean {replacement}?")
+    } else {
+        String::new()
+    };
+    format!("Unknown field {key}{hint}; it is ignored")
 }
 
 /// A compact scalar choice hint is presentation only; the library decides validity.
@@ -900,6 +932,9 @@ fn schema_error(
                 }
                 error.to_string()
             }
+        }
+        Kind::Type { .. } if path.ends_with("/color") => {
+            format!("Expected {constraint}; color uses a string such as \"ACI 4\" or \"#336699\"")
         }
         Kind::Type { .. } => format!("Expected {constraint}"),
         Kind::Constant { expected_value } => format!("Expected {expected_value}"),

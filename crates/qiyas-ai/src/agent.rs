@@ -32,7 +32,7 @@ pub const MAX_TOOL_CALLS: usize = 40;
 pub const MAX_DRAWING_CALLS: usize = 120;
 /// Token limits use a conservative local estimate; providers report exact usage afterwards.
 pub const MAX_INPUT_TOKENS: usize = 250_000;
-pub const COMPACT_AT: usize = 150_000;
+pub const COMPACT_AT: usize = 90_000;
 /// Keep at least four complete call/result pairs during token compaction.
 pub const KEEP_RECENT: usize = 8;
 pub const TOO_LONG: &str = "conversation is long, start a new one";
@@ -855,7 +855,7 @@ impl Agent {
             }
         }
         let pointed_destination = !pointed.selection.is_empty() || pointed.region.is_some();
-        self.compact();
+        self.maintain_history();
         if crate::history::tokens(&self.history) >= MAX_INPUT_TOKENS && !self.fit_history() {
             return self.stop(&events, TOO_LONG).await;
         }
@@ -1019,18 +1019,7 @@ impl Agent {
             if cancel.is_cancelled() {
                 return self.stop(&events, "cancelled").await;
             }
-            self.compact();
-            if let Some(trim) = crate::history::trim(&mut self.history) {
-                self.rebuild = Some("trim".into());
-                self.log("CACHE REBUILD", || {
-                    format!(
-                        "Expected rebuild: trimmed {} results; estimated tokens {} -> {}",
-                        trim.results, trim.before, trim.after
-                    )
-                });
-                self.trim_pictures();
-                self.last_picture = None;
-            }
+            self.maintain_history();
             if crate::history::tokens(&self.history) > MAX_INPUT_TOKENS && !self.fit_history() {
                 return self.stop(&events, TOO_LONG).await;
             }
@@ -2370,10 +2359,27 @@ impl Agent {
         .map_err(|e| format!("The drawing state could not be read: {e}"))?
     }
 
+    /// Trim recoverable evidence before retiring whole messages, including at turn startup.
+    fn maintain_history(&mut self) {
+        self.trim_pictures();
+        let protected = self.provider.protected_call_inputs();
+        if let Some(trim) = crate::history::trim_protected(&mut self.history, &protected) {
+            self.rebuild = Some("trim".into());
+            self.log("CACHE REBUILD", || {
+                format!(
+                    "Expected rebuild: trimmed {} results and {} call inputs; estimated tokens {} -> {}",
+                    trim.results, trim.inputs, trim.before, trim.after
+                )
+            });
+            self.last_picture = None;
+        }
+        self.compact();
+    }
+
     /// Replaces the oldest pictures in the history with `PICTURE_REMOVED` once it holds more
     /// than `MAX_PICTURES` of them or `MAX_PICTURE_BYTES`, keeping the newest `KEEP_PICTURES`
     /// within `KEEP_PICTURE_BYTES` (the newest always).
-    fn trim_pictures(&mut self) {
+    fn trim_pictures(&mut self) -> bool {
         // Where each picture is, oldest first: message, block, part of a tool result, bytes.
         let mut found: Vec<(usize, usize, Option<usize>, usize)> = Vec::new();
         for (m, message) in self.history.iter().enumerate() {
@@ -2393,7 +2399,7 @@ impl Agent {
         }
         let bytes: usize = found.iter().map(|f| f.3).sum();
         if found.len() <= MAX_PICTURES && bytes <= MAX_PICTURE_BYTES {
-            return;
+            return false;
         }
         let (mut kept, mut kept_bytes, mut cut) = (0, 0, found.len());
         for (k, f) in found.iter().enumerate().rev() {
@@ -2419,9 +2425,12 @@ impl Agent {
                 _ => {}
             }
         }
-        self.log("PICTURES", || {
+        self.last_picture = None;
+        self.rebuild = Some("picture watermark".into());
+        self.log("CACHE REBUILD (PICTURES)", || {
             format!("{cut} older pictures removed from the conversation, {kept} kept")
         });
+        true
     }
 
     /// A context refusal gets one smaller request. User words, tool ids and result pairing
@@ -3714,26 +3723,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn picture_watermark_retires_old_captures_without_waiting_for_large_text_results() {
+        let mut agent = Agent::new(
+            Box::new(Counting(Arc::new(AtomicUsize::new(0)))),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        for i in 0..13 {
+            agent.history.push(Message::user(vec![ContentBlock::Image {
+                media_type: "image/png".into(),
+                data: format!("picture-{i}"),
+            }]));
+        }
+        let newest = agent.history[5..].to_vec();
+        assert!(crate::history::trim(&mut agent.history).is_none());
+        assert!(agent.trim_pictures());
+        assert_eq!(&agent.history[5..], &newest);
+        assert_eq!(agent.rebuild.as_deref(), Some("picture watermark"));
+        assert!(!agent.trim_pictures());
+    }
+
     #[tokio::test]
-    async fn a_long_conversation_is_compacted_and_goes_on() {
+    async fn a_long_conversation_trims_before_compacting_and_goes_on() {
         let sent = Arc::new(AtomicUsize::new(0));
         let mut agent = Agent::new(
             Box::new(Counting(sent.clone())),
             Arc::new(Mutex::new(None)),
             AgentSettings::default(),
         );
-        // The founder's villa: one request, 150 steps and an answer (302 messages).
+        // A megaproject package: one request, 150 steps and an answer (302 messages).
         agent.history.push(Message::user(vec![
             ContentBlock::Text {
                 text: "[state] units: metres".into(),
             },
             ContentBlock::Text {
-                text: "A villa on a 20 by 25 m plot, about 220 m².".into(),
+                text: "A 30-tower hospital campus with 12 floors per tower.".into(),
             },
         ]));
         for i in 0..150 {
             step(&mut agent.history, i);
         }
+        assert!(
+            crate::history::tokens(&agent.history) >= COMPACT_AT,
+            "the fixture must exercise trim before the startup compaction gate"
+        );
+        let recent = agent.history[agent.history.len() - 8..].to_vec();
         agent
             .history
             .push(text(Role::Assistant, "The plan is done."));
@@ -3757,11 +3792,21 @@ mod tests {
             agent.history.len()
         );
         assert_well_formed(&agent.history);
-        let ContentBlock::Text { text: note } = &agent.history[0].content[0] else {
-            panic!("a note first");
-        };
-        assert!(note.starts_with(COMPACTED), "{note}");
-        assert!(note.contains("- qiyas_execute run walls"), "{note}");
+        assert!(agent.history.iter().any(|m| m.content.iter().any(
+            |b| matches!(b, ContentBlock::ToolResult { content, .. }
+                if matches!(content.first(), Some(ResultPart::Text(t)) if t.starts_with("[tool result summary]")))
+        )), "old verbose results make room before full compaction");
+        assert_eq!(
+            agent.history.iter().flat_map(Message::tool_uses).count(),
+            150,
+            "result trimming keeps every call/result pair"
+        );
+        for message in recent {
+            assert!(
+                agent.history.contains(&message),
+                "the newest four calls and results stay exact"
+            );
+        }
         let has = |words: &str| {
             agent.history.iter().any(|m| {
                 m.content
@@ -3770,7 +3815,7 @@ mod tests {
             })
         };
         assert!(
-            has("A villa on a 20 by 25 m plot, about 220 m²."),
+            has("A 30-tower hospital campus with 12 floors per tower."),
             "the brief is kept whole"
         );
         assert!(

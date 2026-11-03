@@ -132,6 +132,15 @@ impl Provider for OpenAiCompatible {
             }
         })
     }
+    fn protected_call_inputs(&self) -> std::collections::BTreeSet<String> {
+        self.extras
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     fn save_state(&self) -> Value {
         json!({
             "extras": self.extras.lock().map(|v| v.clone()).unwrap_or_default(),
@@ -779,6 +788,10 @@ mod tests {
         let saved = serde_json::to_vec(&original.save_state()).unwrap();
         let resumed = OpenAiCompatible::new("http://localhost/v1", None);
         resumed.restore_state(serde_json::from_slice(&saved).unwrap());
+        assert_eq!(
+            resumed.protected_call_inputs(),
+            std::collections::BTreeSet::from(["c1".into()])
+        );
         let request = TurnRequest {
             cache_key: "offline-test-conversation".into(),
             system: "Unchanged".into(),

@@ -61,6 +61,11 @@ pub trait Provider: Send + Sync {
 
     fn restore_state(&self, _state: Value) {}
 
+    /// Calls carrying provider signatures outside message blocks must keep their exact inputs.
+    fn protected_call_inputs(&self) -> std::collections::BTreeSet<String> {
+        Default::default()
+    }
+
     /// Sends `req`, calls `sink` with each event as it arrives, and returns the whole turn.
     fn stream_turn<'a>(
         &'a self,

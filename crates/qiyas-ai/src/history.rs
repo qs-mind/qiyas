@@ -6,9 +6,9 @@ use serde_json::{json, Value};
 use crate::{ContentBlock, Message, ResultPart};
 
 pub(crate) const KEEP_RESULTS: usize = 4;
-pub(crate) const HIGH_TOKENS: usize = 100_000;
-pub(crate) const LOW_TOKENS: usize = 55_000;
-pub(crate) const CLEAR_AT_LEAST: usize = 30_000;
+pub(crate) const HIGH_TOKENS: usize = 60_000;
+pub(crate) const LOW_TOKENS: usize = 30_000;
+pub(crate) const CLEAR_AT_LEAST: usize = 12_000;
 const SUMMARY_MARK: &str = "[tool result summary]";
 
 #[derive(Debug, Clone, Copy)]
@@ -16,6 +16,7 @@ pub(crate) struct Trim {
     pub before: usize,
     pub after: usize,
     pub results: usize,
+    pub inputs: usize,
 }
 
 /// Conservative local estimate, not a provider tokenizer. Never count base64 as prose.
@@ -45,31 +46,75 @@ pub(crate) fn message_tokens(message: &Message) -> usize {
 
 /// Only a threshold crossing may rewrite results. Prepare a whole batch first, and do
 /// nothing unless it clears enough context to justify rebuilding the provider cache.
+#[cfg(test)]
 pub(crate) fn trim(history: &mut [Message]) -> Option<Trim> {
-    trim_at(history, HIGH_TOKENS, LOW_TOKENS, CLEAR_AT_LEAST)
+    trim_protected(history, &BTreeSet::new())
 }
 
+/// Some providers keep call signatures outside Message; those arguments are immutable too.
+pub(crate) fn trim_protected(
+    history: &mut [Message],
+    protected: &BTreeSet<String>,
+) -> Option<Trim> {
+    trim_with_save(
+        history,
+        HIGH_TOKENS,
+        LOW_TOKENS,
+        CLEAR_AT_LEAST,
+        KEEP_RESULTS,
+        protected,
+        &mut crate::artifact::save,
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn trim_at(
     history: &mut [Message],
     high: usize,
     low: usize,
     minimum: usize,
 ) -> Option<Trim> {
-    trim_with_keep(history, high, low, minimum, KEEP_RESULTS)
+    trim_with_save(
+        history,
+        high,
+        low,
+        minimum,
+        KEEP_RESULTS,
+        &BTreeSet::new(),
+        &mut crate::artifact::save,
+    )
 }
 
 /// A provider has refused the context: one recovery attempt may retire even recent evidence.
 /// The evidence stays reachable, and every call id, user request and signature stays intact.
 pub(crate) fn context_refusal(history: &mut [Message]) -> Option<Trim> {
-    trim_with_keep(history, 0, tokens(history) / 2, 1, 0)
+    // A refusal may retire recent results, but never changes signed call inputs.
+    // Leave all arguments unchanged here; ordinary maintenance already handles safe inputs.
+    let protected = history
+        .iter()
+        .flat_map(Message::tool_uses)
+        .map(|(id, _, _)| id.to_owned())
+        .collect();
+    trim_with_save(
+        history,
+        0,
+        tokens(history) / 2,
+        1,
+        0,
+        &protected,
+        &mut crate::artifact::save,
+    )
 }
 
-fn trim_with_keep(
+#[allow(clippy::too_many_arguments)]
+fn trim_with_save(
     history: &mut [Message],
     high: usize,
     low: usize,
     minimum: usize,
     keep: usize,
+    protected: &BTreeSet<String>,
+    save: &mut impl FnMut(&Value) -> Result<String, crate::ToolError>,
 ) -> Option<Trim> {
     let before = tokens(history);
     if before < high {
@@ -90,11 +135,69 @@ fn trim_with_keep(
         .flat_map(|m| &m.content)
         .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
         .count();
+    let completed: BTreeSet<_> = history
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let recent: BTreeSet<_> = history
+        .iter()
+        .rev()
+        .flat_map(|m| m.content.iter().rev())
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .take(keep)
+        .collect();
     let mut index = 0;
     let mut after = before;
     let mut changes = Vec::new();
     for (m, message) in history.iter().enumerate() {
+        let signed = message
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Thinking { .. } | ContentBlock::Raw(_)));
         for (b, block) in message.content.iter().enumerate() {
+            if let ContentBlock::ToolUse { id, name, input } = block {
+                // Completed historical calls only. Signed provider content is never rewritten.
+                if signed
+                    || protected.contains(id)
+                    || recent.contains(id.as_str())
+                    || !completed.contains(id.as_str())
+                    || input.get("_history_summary").is_some()
+                    || serde_json::to_vec(input).map_or(0, |v| v.len()) < 8_192
+                {
+                    continue;
+                }
+                let original = json!({"call_id":id,"name":name,"input":input});
+                let artifact = crate::artifact::hash(
+                    crate::artifact::canonical(&original).to_string().as_bytes(),
+                );
+                let args = crate::surface::args_of(input).ok();
+                let replacement = ContentBlock::ToolUse {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: json!({"op":input["op"],"_history_summary":{
+                        "operation":calls.get(id),"artifact":artifact,"pointer":"/input",
+                        "command_count":args.as_ref().and_then(|a| a["commands"].as_array()).map(Vec::len),
+                        "detail":"Historical call already completed; original arguments are in the immutable artifact. This summary is not executable."
+                    }}),
+                };
+                let old = message_tokens(&Message::assistant(vec![block.clone()]));
+                let new = message_tokens(&Message::assistant(vec![replacement.clone()]));
+                if old > new {
+                    after = after.saturating_sub(old - new);
+                    changes.push((m, b, replacement, original));
+                }
+                if after <= low {
+                    break;
+                }
+                continue;
+            }
             let ContentBlock::ToolResult {
                 tool_use_id,
                 content,
@@ -156,7 +259,16 @@ fn trim_with_keep(
                 continue;
             }
             after = after.saturating_sub(old - new);
-            changes.push((m, b, replacement, original));
+            changes.push((
+                m,
+                b,
+                ContentBlock::ToolResult {
+                    tool_use_id: tool_use_id.clone(),
+                    content: vec![ResultPart::Text(replacement)],
+                    is_error: *is_error,
+                },
+                original,
+            ));
             if after <= low {
                 break;
             }
@@ -172,26 +284,29 @@ fn trim_with_keep(
     let mut cleared = 0;
     for (m, b, text, original) in changes {
         // Keep the old result if its lossless evidence could not be saved.
-        if crate::artifact::save(&original).is_err() {
+        if save(&original).is_err() {
             continue;
         }
         cleared += message_tokens(&Message::user(vec![history[m].content[b].clone()]))
-            .saturating_sub(text.len().div_ceil(3) + 12);
+            .saturating_sub(message_tokens(&Message::user(vec![text.clone()])));
         ready.push((m, b, text));
     }
     if cleared < minimum {
         return None;
     }
-    let applied = ready.len();
-    for (m, b, text) in ready {
-        if let ContentBlock::ToolResult { content, .. } = &mut history[m].content[b] {
-            *content = vec![ResultPart::Text(text)];
-        }
+    let results = ready
+        .iter()
+        .filter(|(_, _, b)| matches!(b, ContentBlock::ToolResult { .. }))
+        .count();
+    let inputs = ready.len() - results;
+    for (m, b, replacement) in ready {
+        history[m].content[b] = replacement;
     }
-    (applied > 0).then(|| Trim {
+    (results + inputs > 0).then(|| Trim {
         before,
         after: tokens(history),
-        results: applied,
+        results,
+        inputs,
     })
 }
 
@@ -287,6 +402,14 @@ pub(crate) fn evidence(history: &[Message]) -> Result<Vec<Value>, crate::ToolErr
         .flat_map(Message::tool_uses)
         .map(|(id, name, input)| (id.to_owned(), operation(name, input)))
         .collect();
+    let mut inputs = BTreeMap::new();
+    for (id, name, input) in history.iter().flat_map(Message::tool_uses) {
+        let artifact = match input["_history_summary"]["artifact"].as_str() {
+            Some(id) => id.to_owned(),
+            None => crate::artifact::save(&json!({"call_id":id,"name":name,"input":input}))?,
+        };
+        inputs.insert(id.to_owned(), artifact);
+    }
     let mut saved = BTreeMap::new();
     for block in history.iter().flat_map(|m| &m.content) {
         match block {
@@ -318,7 +441,7 @@ pub(crate) fn evidence(history: &[Message]) -> Result<Vec<Value>, crate::ToolErr
                     Some(id) => id.to_owned(),
                     None => crate::artifact::save(&value)?,
                 };
-                saved.insert(json!(tool_use_id).to_string(),json!({"call_id":tool_use_id,"operation":calls.get(tool_use_id),"is_error":is_error,"artifact":artifact}));
+                saved.insert(json!(tool_use_id).to_string(),json!({"call_id":tool_use_id,"operation":calls.get(tool_use_id),"is_error":is_error,"artifact":artifact,"input_artifact":inputs.get(tool_use_id),"input_pointer":"/input"}));
             }
             _ => {}
         }
@@ -406,6 +529,121 @@ fn references(value: &Value, key: &str, refs: &mut BTreeMap<String, BTreeSet<Str
 mod tests {
     use super::*;
     use crate::Role;
+
+    fn batch_history() -> Vec<Message> {
+        let mut history = vec![Message::user(vec![ContentBlock::Text {
+            text: "Keep all engineering instructions. حافظ على الكلمات.".into(),
+        }])];
+        for n in 0..12 {
+            history.push(Message::assistant(vec![ContentBlock::ToolUse {
+                id: format!("batch-{n}"),
+                name: "qiyas_execute".into(),
+                input: json!({"op":"batch","args":{"commands":[{"type":"text","text":"detail".repeat(9_000)}]}}),
+            }]));
+            history.push(Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: format!("batch-{n}"),
+                content: vec![ResultPart::Text(
+                    "{\"revision\":7,\"status\":\"ok\"}".into(),
+                )],
+                is_error: false,
+            }]));
+        }
+        history
+    }
+
+    #[test]
+    fn old_large_inputs_retire_into_readable_artifacts_but_recent_pairs_stay_whole() {
+        let mut history = batch_history();
+        let before = history.clone();
+        let report = trim(&mut history).expect("large arguments must make room too");
+        assert!(report.after < report.before / 2);
+        assert_eq!(history[0], before[0]);
+        assert_eq!(&history[history.len() - 8..], &before[before.len() - 8..]);
+        let (_, _, input) = history[1].tool_uses().next().unwrap();
+        let id = input["_history_summary"]["artifact"].as_str().unwrap();
+        let page = crate::artifact::read(&json!({"id":id,"pointer":"/input/op"})).unwrap();
+        assert_eq!(page["data"], "\"batch\"");
+        let archived =
+            crate::artifact::read(&json!({"id":id,"pointer":"/input/args/commands/0/type"}))
+                .unwrap();
+        assert_eq!(archived["data"], "\"text\"");
+        assert_eq!(
+            history[2], before[2],
+            "small result does not need a rewrite"
+        );
+        for (a, b) in before.iter().zip(&history) {
+            assert_eq!(
+                a.tool_uses()
+                    .map(|(id, name, _)| (id, name))
+                    .collect::<Vec<_>>(),
+                b.tool_uses()
+                    .map(|(id, name, _)| (id, name))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn signed_and_opaque_assistant_messages_and_external_signatures_keep_exact_inputs() {
+        let mut history = batch_history();
+        history[1].content.insert(
+            0,
+            ContentBlock::Thinking {
+                thinking: "reason".into(),
+                signature: "signed".into(),
+            },
+        );
+        history[3].content.insert(
+            0,
+            ContentBlock::Raw(json!({"type":"reasoning","encrypted_content":"opaque"})),
+        );
+        let before = history.clone();
+        let protected = BTreeSet::from(["batch-2".to_owned()]);
+        trim_protected(&mut history, &protected).unwrap();
+        assert_eq!(&history[..7], &before[..7]);
+        assert_ne!(history[7], before[7], "unsigned old arguments can retire");
+    }
+
+    #[test]
+    fn input_retirement_keeps_unpaired_calls_and_failed_storage_unchanged() {
+        let mut history = batch_history();
+        let before = history.clone();
+        assert!(trim_with_save(
+            &mut history,
+            1,
+            1,
+            1,
+            KEEP_RESULTS,
+            &BTreeSet::new(),
+            &mut |_| Err(crate::ToolError::Failed("disk full".into()))
+        )
+        .is_none());
+        assert_eq!(history, before);
+        history.remove(2);
+        trim_at(&mut history, 1, 1, 1).unwrap();
+        assert_eq!(
+            history[1], before[1],
+            "pending call has no evidence to retire yet"
+        );
+    }
+
+    #[test]
+    fn full_compaction_indexes_original_arguments_even_for_signed_calls() {
+        let mut history = batch_history();
+        history[1].content.insert(
+            0,
+            ContentBlock::Thinking {
+                thinking: "reason".into(),
+                signature: "signed".into(),
+            },
+        );
+        let index = evidence(&history).unwrap();
+        let entry = index.iter().find(|e| e["call_id"] == "batch-0").unwrap();
+        let page =
+            crate::artifact::read(&json!({"id":entry["input_artifact"],"pointer":"/input/op"}))
+                .unwrap();
+        assert_eq!(page["data"], "\"batch\"");
+    }
 
     #[test]
     fn short_jobs_are_append_only_even_with_duplicate_reads() {

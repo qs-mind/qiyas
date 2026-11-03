@@ -312,6 +312,46 @@ fn every_example_reads_back_as_its_command() {
 }
 
 #[test]
+fn object_pack_examples_install_and_read_drawing_owned_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new_blank(&dir.path().join("airport-packs.dxf"), 6);
+    let reg = registry();
+    let install = &reg.get("install_object_pack").unwrap().examples[0];
+    let reads = &reg.get("read_object_pack").unwrap().examples;
+    assert!(
+        !reads.is_empty(),
+        "the read command needs an executable example"
+    );
+    for read in reads {
+        assert!(session.run_input(read, qiyas_core::Source::Ai).is_err());
+    }
+    assert!(!session.is_dirty());
+    session.run_input(install, qiyas_core::Source::Ai).unwrap();
+    let before = fingerprint(&session);
+    for read in reads {
+        assert!(session.validate_input(read).valid);
+        let qiyas_core::Outcome::ObjectPack { data } = session
+            .run_input(read, qiyas_core::Source::Ai)
+            .unwrap()
+            .outcome
+        else {
+            panic!("read_object_pack must return the installed pack");
+        };
+        assert_eq!(data, install["data"]);
+        assert_eq!(
+            fingerprint(&session),
+            before,
+            "reading must not edit the drawing"
+        );
+    }
+    assert!(session.undo());
+    for read in reads {
+        assert!(session.run_input(read, qiyas_core::Source::Ai).is_err());
+    }
+    assert!(!session.can_undo(), "reading must not add an undo step");
+}
+
+#[test]
 fn schemas_are_self_contained_and_name_their_type() {
     for c in registry().commands() {
         let text = c.schema.to_string();

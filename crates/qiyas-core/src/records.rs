@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use opencadcodec::objects::ObjectType;
 use opencadcodec::tables::normalize_name;
+use opencadcodec::{CadDocument, EntityType};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -40,7 +41,11 @@ pub enum Collection {
     Linetypes,
     TextStyles,
     DimStyles,
-    /// Block definitions (block records): their entities are `entities` with `block`.
+    /// Block definitions: entities, layout, base_point (block coordinates), bounds_m,
+    /// size_m, attribute_tags and insert_count. Bounds are conservative plan boxes in the
+    /// block's units converted to metres (drawing units when unspecified). insert_count
+    /// counts stored INSERT array cells across sheets and definitions, without expanding
+    /// parent instances. Use where layout=false to omit sheet records.
     Blocks,
     Layouts,
     /// The paper-space viewports of every layout (entities of type Viewport).
@@ -152,7 +157,8 @@ pub struct RecordQuery {
     #[serde(rename = "where")]
     pub conditions: Vec<Where>,
     /// Summary names (key, type, layer, length, area, text) or JSON pointers into data.
-    /// Lengths, areas and bounds use drawing units. Missing properties are reported in warnings.
+    /// Lengths, areas and bounds use drawing units except explicitly suffixed _m fields.
+    /// Missing properties are reported in warnings.
     pub fields: Vec<String>,
     pub detail: Detail,
     pub offset: usize,
@@ -177,11 +183,188 @@ pub struct RecordPage {
     pub warnings: Vec<String>,
 }
 
+type PlanBounds = [[f64; 2]; 2];
+// None is an empty definition; Err means no reliable finite box (including a cycle).
+type ComponentBounds = Result<Option<PlanBounds>, ()>;
+
+fn include_bounds(total: &mut Option<PlanBounds>, bounds: PlanBounds) -> Result<(), ()> {
+    if !bounds.iter().flatten().all(|v| v.is_finite()) {
+        return Err(());
+    }
+    if let Some(total) = total {
+        for axis in 0..2 {
+            total[0][axis] = total[0][axis].min(bounds[0][axis]);
+            total[1][axis] = total[1][axis].max(bounds[1][axis]);
+        }
+    } else {
+        *total = Some(bounds);
+    }
+    Ok(())
+}
+
+/// Text boxes must use the renderer's shaping, rotation and alignment. Codec source boxes
+/// ignore those transforms. A temporary, missing block carries only an attribute's text;
+/// no definition or array is expanded by this path.
+fn component_entity_bounds(
+    doc: &CadDocument,
+    entity: &EntityType,
+    text: &mut qiyas_render::TextEngine,
+    arabic_reversed: bool,
+) -> ComponentBounds {
+    use opencadcodec::entities::{AttributeEntity, Insert};
+
+    if entity.common().invisible {
+        return Ok(None);
+    }
+    let wrapped;
+    let shown = match entity {
+        EntityType::AttributeDefinition(a) => {
+            if !a.flags.constant || a.flags.invisible || a.default_value.is_empty() {
+                return Ok(None);
+            }
+            let mut attribute = AttributeEntity::from_definition(a, Some(a.default_value.clone()));
+            attribute.common = a.common.clone();
+            let mut insert = Insert::new("", opencadcodec::Vector3::ZERO);
+            insert.attributes.push(attribute);
+            wrapped = EntityType::Insert(insert);
+            &wrapped
+        }
+        EntityType::AttributeEntity(a) => {
+            if a.flags.invisible || a.value.is_empty() {
+                return Ok(None);
+            }
+            let mut insert = Insert::new("", opencadcodec::Vector3::ZERO);
+            insert.attributes.push(a.clone());
+            wrapped = EntityType::Insert(insert);
+            &wrapped
+        }
+        EntityType::Text(_) | EntityType::MText(_) => entity,
+        _ => {
+            return qiyas_geom::FlattenOutcome::source_bounds(
+                doc,
+                entity,
+                &qiyas_geom::Xform::identity(),
+            )
+            .map(Some)
+            .ok_or(());
+        }
+    };
+    // The tolerance is unused for these text-only entities.
+    let flattened = qiyas_geom::flatten(doc, shown, &qiyas_geom::Xform::identity(), 1.0);
+    if flattened.truncated || flattened.paths.is_empty() {
+        return Err(());
+    }
+    let mut total = None;
+    for path in flattened.paths {
+        let flat_text = path.text.as_ref().ok_or(())?;
+        let (_, _, corners) = text.lay_out(doc, flat_text, arabic_reversed).ok_or(())?;
+        for point in corners {
+            include_bounds(&mut total, [point, point])?;
+        }
+    }
+    Ok(total)
+}
+
+/// Memoized definition boxes, without tessellation or expanding insertion arrays. Child
+/// boxes are transformed conservatively; text alone uses renderer shaping, and only the
+/// four extreme cells of an array matter.
+/// At a cycle, missing block, unbounded entity or depth limit, omit the whole size rather
+/// than present a partial box as a complete component.
+fn component_bounds(
+    doc: &CadDocument,
+    name: &str,
+    cache: &mut BTreeMap<String, ComponentBounds>,
+    visiting: &mut BTreeSet<String>,
+    text: &mut qiyas_render::TextEngine,
+    arabic_reversed: bool,
+) -> ComponentBounds {
+    let key = normalize_name(name);
+    if let Some(bounds) = cache.get(&key) {
+        return *bounds;
+    }
+    if visiting.len() >= 32 || !visiting.insert(key.clone()) {
+        return Err(());
+    }
+    let result = (|| {
+        doc.block_records.get(name).ok_or(())?;
+        let mut total = None;
+        let identity = qiyas_geom::Xform::identity();
+        for entity in doc.entities_in_block(name) {
+            if entity.common().invisible {
+                continue;
+            }
+            if let EntityType::Insert(insert) = entity {
+                let child = component_bounds(
+                    doc,
+                    &insert.block_name,
+                    cache,
+                    visiting,
+                    text,
+                    arabic_reversed,
+                )?;
+                if let Some([min, max]) = child {
+                    let corners = [min, [min[0], max[1]], max, [max[0], min[1]]];
+                    let mut extremes = insert.clone();
+                    extremes.column_spacing *= f64::from(insert.column_count.max(1) - 1);
+                    extremes.row_spacing *= f64::from(insert.row_count.max(1) - 1);
+                    extremes.column_count = insert.column_count.clamp(1, 2);
+                    extremes.row_count = insert.row_count.clamp(1, 2);
+                    for xf in qiyas_geom::insert_instances(doc, &extremes, &identity) {
+                        for corner in corners {
+                            let p = xf.apply(corner);
+                            include_bounds(&mut total, [p, p])?;
+                        }
+                    }
+                }
+                for attribute in &insert.attributes {
+                    let entity = EntityType::AttributeEntity(attribute.clone());
+                    if let Some(bounds) =
+                        component_entity_bounds(doc, &entity, text, arabic_reversed)?
+                    {
+                        include_bounds(&mut total, bounds)?;
+                    }
+                }
+            } else if !matches!(entity, EntityType::Block(_) | EntityType::BlockEnd(_)) {
+                if let Some(bounds) = component_entity_bounds(doc, entity, text, arabic_reversed)? {
+                    include_bounds(&mut total, bounds)?;
+                }
+            }
+        }
+        Ok(total)
+    })();
+    visiting.remove(&key);
+    cache.insert(key, result);
+    result
+}
+
 impl Session {
     /// The records of `q.collection` that match `q`, one page.
     pub fn records(&self, q: &RecordQuery) -> Result<RecordPage, CoreError> {
         let _read = self.evaluation_read()?;
-        let detail = if q.fields.is_empty() && q.conditions.is_empty() {
+        // Component summaries must not serialize every block's entity_handles merely to
+        // apply `where layout=false` or select their measured summary fields.
+        let block_summary = q.collection == Collection::Blocks
+            && q.fields
+                .iter()
+                .chain(q.conditions.iter().map(|w| &w.path))
+                .all(|path| {
+                    matches!(
+                        path.as_str(),
+                        "key"
+                            | "type"
+                            | "handle"
+                            | "entities"
+                            | "layout"
+                            | "base_point"
+                            | "bounds_m"
+                            | "size_m"
+                            | "bounds_kind"
+                            | "bounds_complete"
+                            | "attribute_tags"
+                            | "insert_count"
+                    )
+                });
+        let detail = if (q.fields.is_empty() && q.conditions.is_empty()) || block_summary {
             q.detail
         } else {
             Detail::Full
@@ -476,19 +659,50 @@ impl Session {
                 .iter()
                 .map(|t| table(&t.name, "View", to_value(t), json!({})))
                 .collect(),
-            Collection::Blocks => doc
-                .block_records
-                .iter()
-                .map(|b| {
-                    let count = self.drawing.entities_in(&b.name).count();
-                    table(
-                        &b.name,
-                        "BlockRecord",
-                        to_value(b),
-                        json!({ "entities": count, "layout": b.name.starts_with("*Paper_Space") || b.name.eq_ignore_ascii_case("*Model_Space") }),
-                    )
-                })
-                .collect(),
+            Collection::Blocks => {
+                // One document scan, independent of the number of block definitions.
+                let mut inserts = BTreeMap::<String, u64>::new();
+                for entity in doc.entities() {
+                    if let EntityType::Insert(i) = entity {
+                        let cells = u64::from(i.column_count.max(1)) * u64::from(i.row_count.max(1));
+                        let count = inserts.entry(normalize_name(&i.block_name)).or_default();
+                        *count = count.saturating_add(cells);
+                    }
+                }
+                let mut bounds = BTreeMap::new();
+                let mut visiting = BTreeSet::new();
+                let mut text = self.text.borrow_mut();
+                doc.block_records.iter().map(|b| {
+                    let layout = b.name.to_ascii_uppercase().starts_with("*PAPER_SPACE")
+                        || b.name.eq_ignore_ascii_case("*Model_Space");
+                    let mut summary = json!({
+                        "entities": self.drawing.entities_in(&b.name).count(),
+                        "layout": layout,
+                    });
+                    if !layout {
+                        let measured = component_bounds(doc, &b.name, &mut bounds, &mut visiting, &mut text, self.arabic_reversed);
+                        let units = match crate::Units::from_header(b.units) {
+                            crate::Units::Unknown => crate::Units::from_header(doc.header.insertion_units),
+                            units => units,
+                        };
+                        let factor = units.to_metres(); // metres per block coordinate unit
+                        let bounds_m = measured.ok().flatten().map(|bb| bb.map(|p| p.map(|v| v * factor)));
+                        let size_m = bounds_m.map(|bb| [bb[1][0] - bb[0][0], bb[1][1] - bb[0][1]]);
+                        let tags: BTreeSet<_> = doc.entities_in_block(&b.name).filter_map(|e| match e {
+                            EntityType::AttributeDefinition(a) => Some(a.tag.as_str()),
+                            _ => None,
+                        }).collect();
+                        summary["base_point"] = json!([b.base_point.x, b.base_point.y, b.base_point.z]);
+                        summary["bounds_m"] = json!(bounds_m);
+                        summary["size_m"] = json!(size_m);
+                        summary["bounds_kind"] = json!("conservative");
+                        summary["bounds_complete"] = json!(measured.is_ok());
+                        summary["attribute_tags"] = json!(tags);
+                        summary["insert_count"] = json!(inserts.get(&normalize_name(&b.name)).copied().unwrap_or(0));
+                    }
+                    table(&b.name, "BlockRecord", if full { to_value(b) } else { Value::Null }, summary)
+                }).collect()
+            }
             Collection::Layouts => {
                 let mut layouts: Vec<Value> = doc
                     .objects

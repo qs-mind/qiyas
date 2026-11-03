@@ -276,6 +276,13 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   sheet, bounds and `where` (eq, ne, in, not_in, lt, le, gt, ge, contains, exists on a summary
   name or a JSON pointer into `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) with a 12 KB budget for records and warnings, excluding the page envelope
   (`MAX_BYTES`, `truncated`; one oversized record can exceed the budget); arrays past 100 items say how many they left out.
+- Component reuse stays in the drawing. `records` with `collection:"blocks"` and
+  `where:[{path:"layout",value:false}]` lists definitions with `base_point` in block coordinates,
+  conservative plan `bounds_m` and `size_m`, `bounds_complete`, `attribute_tags` and `insert_count`.
+  Sizes use the block's own units, falling back to drawing INSUNITS. `insert_count` counts stored
+  INSERT array cells across sheets and definitions; it does not multiply nested counts by parent
+  instances. Cyclic or unbounded geometry has no reliable size and is marked incomplete. Reads
+  use the existing page/byte budgets, memoize definition bounds, and never expand large arrays.
 - `qiyas-core/src/record_edit.rs`: `Command::SetRecords { collection, updates: [{key, path,
   value, expected}] }`: serialise, set the JSON pointer, read back with `serde_path_to_error` (the
   error names the field), `entity_from_record` puts back what serde skips (and a block
@@ -636,11 +643,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - MIZAN ALONE remains the priority. No paid eval is part of implementation. The first six-case
   run exposed expensive repeated history, invalid authored definitions and a PDF-only capture
   failure; its 22% coverage is the live baseline, not a target achieved by engine diagnostics.
-- `qiyas-ai/src/history.rs` keeps the newest twenty tool results whole and summarizes older
-  results once, retaining handles, ids, names, decisions and error codes. Identical successful
-  reads keep their newest full result rather than duplicate evidence; changed values stay separate. The first digest and the latest successful command/schema lookups remain whole.
-  Pictures follow their separate retention limit. The system prompt stays unchanged; tool ids, arguments and signatures stay paired.
-  The older message-count compactor remains the final guard for long conversations.
+- `qiyas-ai/src/history.rs` keeps the newest four tool results and their inputs whole. At the
+  token watermark it summarizes old results and completed unsigned inputs of at least 8,192 bytes,
+  keeping originals in evidence artifacts. The first digest, user words, ids, signatures and
+  call/result pairs remain. Pictures have an independent watermark; full token compaction is
+  the final guard. See Context maintenance below for the current thresholds.
 - Records default to summaries without null/empty fields, with a 12 KB record-and-warning budget (page envelope excluded; a single oversized record is allowed); digest previews and capture captions
   are compact. PDF digest entries expose real source paths/pages and document capture arguments.
   Picture framing includes PDF/raster bounds, even without vector geometry. Relative document
@@ -1370,7 +1377,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   failed Save puts back what it wrote and leaves the edit open. `Outcome::BlockEditClosed` says how
   many steps went, and how many take-off rows lost their link. `DrawingInfo::block_edit` names the block.
 - Insert tab, Block group: Create block (B: pick, base point, name dialog), Insert… and Write
-  block… (`BlockPalette`: thumbnails from `block_thumbnail` through `render_png`), Edit in place
+  block… (`BlockPalette`: drawing-owned blocks, thumbnails from `block_thumbnail` through
+  `render_png`; Design Center reuses a drawing the engineer names, with no local component
+  library), Edit in place
   (REFEDIT/BEDIT; the bar saves or discards; REFCLOSE saves), Define attribute (ATT), Edit
   attributes (ATTEDIT, or a double click on an attribute: `AttributesDialog`), Attribute manager
   (BATTMAN), Design Center (another drawing's blocks with their attribute definitions: insert,
@@ -2126,7 +2135,8 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - `qiyas-core/src/data_home.rs::qiyas_dir()` (re-exported by desktop methods) is the Qiyas data home: release builds use
   `~/.qiyas`, debug builds (`pnpm tauri dev`) use the repository's git-ignored
   `.local/qiyas-home`, and `QIYAS_HOME` overrides either. It creates `methods/` and `projects/`
-  on first use. Settings offers named methods and local `methods/*.json` as extra choices; no measurement rules ship with Qiyas.
+  on first use. Components stay in their drawing; there is no component-library folder or
+  machine-specific design index. Settings offers named methods and local `methods/*.json` as extra choices; no measurement rules ship with Qiyas.
   Version 1 validates `{name, title, based_on, source_note, rules: []}` and the cited rule
   contents through the Phase 18 engine (an omitted version means 1). Mizan's live state reports the name and whether a nonempty rule set was loaded;
   without rules, quantities are geometric and answers say so.
@@ -2343,10 +2353,14 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
   room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
   for each live run.
-- Context maintenance counts estimated tokens, not messages. At 100,000 tokens, result
-  trimming targets 55,000 and requires at least 30,000 tokens cleared in one batch. It keeps
-  the first digest, newest four detailed results, calls, signatures and user words. Full
-  compaction starts at 150,000 estimated tokens, keeps a recent window of about 55,000 tokens
+- Context maintenance counts estimated tokens, not messages. At 60,000 tokens, result/input
+  trimming targets 30,000 and requires at least 12,000 tokens cleared in one batch. It keeps
+  the first digest, newest four detailed results and their arguments, pending calls, signatures
+  and user words. Completed unsigned inputs at least 8,192 bytes get summaries with original
+  argument artifacts; signed/opaque messages and provider-side signatures keep exact inputs.
+  Picture maintenance runs independently at 12 images or 16 MB, keeping its recent image window.
+  Turn startup and each provider request share the same trim-then-compact path.
+  Full compaction runs after trimming, starts at 90,000 estimated tokens and keeps a recent window of about 55,000 tokens
   and at least eight messages, and respects complete call/result boundaries. Its local note
   retains user requests word for word, failed outcomes, recent steps, the first digest,
   open tasks, discovered contract references and an index of full-evidence artifacts. It
@@ -3278,11 +3292,11 @@ New untitled drawings skip placeholder names already present in chat history or 
   choice when the provider has no metadata. Text-only tool-capable models remain selectable.
   A false capability withholds both new and historical images. Unknown capability never
   licenses a claim to have inspected a picture.
-- Optional data: `read_object_pack {name:"interiors"}` returns the cited, editable JSON starter
-  pack; `install_object_pack {name:"interiors"}` installs it in one undo step. Alternatively
-  supply `data` with your own pack. It defines WC, basin and sink types, back/body/clearance
-  recipes and optional `placement` checks. Dimensions and tolerances live in JSON, never
-  Rust. Starter dimensions are assumptions, not product specifications or certification.
+- Optional data: Qiyas ships no interiors pack. `install_object_pack {data:...}` installs a
+  pack authored by Mizan or the engineer in one undo step; old built-in names return a supply-data
+  error. `read_object_pack {name:...}` reads the authored pack data installed in this drawing.
+  Types, zones, placement checks, dimensions, tolerances and citations come from that pack.
+  No fixed furniture or fixture geometry ships with this mechanism.
   `place_objects {objects:[{type:"WC",host:123,props:{distance:2}}]}` places one fixture on
   wall 123, two metres along it, without cutting the wall. Properties follow their declared
   units (length properties use metres); command geometry uses drawing units. `object_zones`
@@ -3358,7 +3372,7 @@ New untitled drawings skip placeholder names already present in chat history or 
 ## Goal C: AI context, evidence and cache reuse (25 October 2026)
 
 - Provider history only appends between token-watermark trims. Duplicate reads, old workflow
-  text, pictures and schema discovery never move or disappear during an ordinary request.
+  text and schema discovery stay stable until a text watermark; pictures have their own watermark.
   Cost and workflow guidance enter new messages. Fixed result placeholders keep the call id,
   operation, important handles and ids, errors and an artifact pointer. A storage failure
   keeps the original evidence instead of discarding it. After an explicit provider context
@@ -3701,7 +3715,8 @@ Outputs remain for review, with design and approval assigned to the engineer.
 
 Founder ruling: Mizan is fully agentic. It takes technical design decisions itself with an
 engineering basis (structure, openings by use and escape, sizes, wall types, details, sheet
-layout) and records each with its reason; it asks the engineer only about the idea (concept,
+layout) and explains its basis where useful; quantity/measurement facts retain their decision
+records. It asks the engineer only about the idea (concept,
 programme and uses, client wishes, scope, key figures, governing standard or jurisdiction).
 Code gives facts and executes; it never steers or rewrites the model. Hard rules are data
 integrity only (schema, undo, stale revision, path sandbox, ownership, locked layers). The
@@ -3713,9 +3728,23 @@ autonomous. Audit and plan: `docs/2026-10-29-*.md` (one note per part).
   edits return the earlier error, the turn goes on; app texts (saved, open phases, brief checks)
   are `AgentEvent::Status {kind, items, language}` in the window and MCP, never appended to the
   answer or model history.
-- Prompts (`mizan-instructions`): about 550/470 words with the expert frame (what a senior
-  expert also checks, raw data, methods, an outside check that would prove it wrong), decide
-  and ask, one source of truth, verify with `outside_check`. Tool how-to lives in tool docs.
+- Prompts (`mizan-instructions`): drawing craft first, with detailed real-size components.
+  Read the drawing's blocks, reuse one or define it once, then insert/array and improve it there.
+  No expert-frame instruction or window display; old `plan.frame` still parses and round-trips.
+  Design work has no every-value decision register. Check each finished part once with the exact
+  drawing check and one picture, fix affected work, then continue. Full self-check and outside
+  check close quantity jobs only. Each named tidy sheet is For review; one final review line is
+  enough. The brief's facts are never invented, and quantity sources/measurement rulings remain.
+- `qiyas-ai/src/drawing_kit.txt` puts compact complete command forms and filled examples in the
+  execute tool description, shared by Mizan and MCP. It is 8,027 UTF-8 bytes, guarded at 8,192:
+  all draw kinds, batches, text, dimensions, walls/openings, block definition/insertion/editing, move/copy/
+  arrays, hatches, sheets/title blocks, properties and records. Examples are syntax, not shipped
+  design content. Tests validate their registry schemas and watch for omitted command fields.
+  Unknown-field diagnostics suggest `prop`, `target` or `field` where applicable, and union
+  diagnostics prefer the supplied object/array shape before counting errors.
+- `scripts/replay-mizan-history.py` is an offline development measurement tool, never an app
+  dependency. It reads a saved conversation without changing it, estimates retained-history
+  context under both policies and states missing-history/image/tokenizer limitations.
 - Domain data is optional knowledge (`optional-domain-knowledge`): `space_check` returns
   polygon facts and applies a practice profile only when selected; room kinds are free; no
   villa or storey defaults; jurisdictions kept as given; physical defaults carry

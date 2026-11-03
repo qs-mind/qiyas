@@ -281,26 +281,31 @@ async fn plan_and_progress_events_reach_the_transcript_in_execution_order() {
 }
 
 #[test]
-fn prompts_separate_the_frame_and_require_self_repairs_without_a_finish_gate() {
+fn prompts_require_part_repairs_without_expert_frame_or_a_finish_gate() {
     for (prompt, repair) in [
         (
             include_str!("../src/prompt_en.txt"),
-            "yours to fix and re-check before finishing",
+            "fix faults and move on",
         ),
-        (
-            include_str!("../src/prompt_ar.txt"),
-            "تصلحه وتعيد فحصه قبل الانتهاء",
-        ),
+        (include_str!("../src/prompt_ar.txt"), "أصلح العيوب وانتقل"),
     ] {
         for field in [
-            "frame",
             "expert_checks",
             "raw_data",
             "methods",
+            "plan.frame",
+            "library.",
+        ] {
+            assert!(!prompt.contains(field), "{field}");
+        }
+        for retained in [
             "outside_check",
             "note",
+            "qiyas_read",
+            "define_block",
+            "insert_block",
         ] {
-            assert!(prompt.contains(field));
+            assert!(prompt.contains(retained), "{retained}");
         }
         assert!(prompt.contains(repair));
     }

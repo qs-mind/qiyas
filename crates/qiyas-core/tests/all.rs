@@ -51,6 +51,8 @@ mod dimension;
 mod discrepancy;
 #[path = "draw.rs"]
 mod draw;
+#[path = "drawing_components.rs"]
+mod drawing_components;
 #[path = "drawing_quality.rs"]
 mod drawing_quality;
 #[path = "edit.rs"]

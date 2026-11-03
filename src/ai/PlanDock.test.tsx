@@ -204,6 +204,16 @@ const frame = {
   methods: "Measure the enclosure", outside_check: "No door outside the boundary",
 };
 
+test("legacy expert frames do not create a dock without multiple work phases", () => {
+  for (const phases of [[], [plan.phases[0]]]) {
+    const legacy = { kind: "plan" as const, phases, frame };
+    expect(latestDockPlan([legacy])).toBeNull();
+    const view = render(<PlanDock {...props} plan={legacy} />);
+    expect(view.container.childElementCount).toBe(0);
+    view.unmount();
+  }
+});
+
 test.each(["en", "ar"] as const)("the expert frame stays out of the dock and never counts as work in %s", (language) => {
   const framed = { ...plan, frame, phases: plan.phases.map((phase, i) => i === 3 ? { ...phase, note: "Review 60 doors on A1 sheets" } : phase) };
   const view = render(<PlanDock {...props} plan={framed} language={language} />);
