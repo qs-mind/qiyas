@@ -215,6 +215,11 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 ## Working here
 
 - Use pnpm, not npm.
+- Fastest development (founder, 3 November 2026): write all the code for a job first, in
+  parallel where tasks are independent (separate git worktrees), then merge, then build once and
+  test once (`scripts/check.sh`), and send every failure back in one batch. No build, test and
+  fix loop after each small feature or each agent: one build and one test at the end, one fix
+  round, then one final check.
 - Agent skills live in `.claude/skills/`; every Qiyas job loads the ones its work needs (the map is
   in `.claude/skills/README.md`: speed, Rust, units, tests, UI, Mizan, security, review).
 - Run `scripts/check.sh` before every commit.
