@@ -121,6 +121,48 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
     }
 }
 
+/// The codec scales table rows and columns; text and padding follow here.
+pub(crate) fn scale_table_text(table: &mut Table, factor: f64) {
+    fn style(style: &mut Option<CellStyle>, factor: f64) {
+        if let Some(style) = style {
+            style.text_height *= factor;
+            style.margin_left *= factor;
+            style.margin_top *= factor;
+            style.margin_right *= factor;
+            style.margin_bottom *= factor;
+            style.horizontal_spacing *= factor;
+            style.vertical_spacing *= factor;
+        }
+    }
+    style(&mut table.base_style, factor);
+    for column in &mut table.columns {
+        style(&mut column.style, factor);
+    }
+    for row in &mut table.rows {
+        style(&mut row.style, factor);
+        for cell in &mut row.cells {
+            style(&mut cell.style, factor);
+            for content in &mut cell.contents {
+                content.text_height *= factor;
+            }
+        }
+    }
+    if let Some(legacy) = &mut table.legacy_style_override {
+        for height in &mut legacy.row_heights {
+            *height *= factor;
+        }
+        for margin in [
+            &mut legacy.horizontal_cell_margin,
+            &mut legacy.vertical_cell_margin,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *margin *= factor;
+        }
+    }
+}
+
 impl Session {
     /// The conventional table sizes, shared with the input-default report.
     pub(crate) fn table_sizes(

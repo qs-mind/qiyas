@@ -200,7 +200,7 @@ fn registry_exposes_generate_without_growing_the_takeoff_kit() {
     let registry = qiyas_core::registry::registry();
     let command = registry.get("generate").unwrap();
     assert_eq!(command.category, "draw");
-    assert!(!command.batchable);
+    assert!(command.batchable);
     assert!(command.examples.len() >= 5);
     for example in &command.examples {
         let report = qiyas_core::validation::validate_command(example, None);
@@ -246,7 +246,19 @@ fn no_file_imports_nested_batches_or_invalid_ranges() {
             .as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        assert!(s.run_input(&input, Source::Ai).is_err(), "{input}");
+        let error = s.run_input(&input, Source::Ai).unwrap_err().to_string();
+        if input["commands"][0]["type"] == "generate" {
+            assert!(
+                error.contains("generate cannot run inside generate"),
+                "{error}"
+            );
+        }
+        if input["commands"][0]["type"] == "batch" {
+            assert!(
+                error.contains("put its commands directly in the recipe"),
+                "{error}"
+            );
+        }
         assert!(!s.undo());
     }
 }
@@ -314,4 +326,99 @@ fn when_guards_variables_that_are_undefined_on_skipped_iterations() {
     );
     assert_eq!(result["skipped"], 3);
     assert_eq!(result["templates"][0]["count"], 2);
+}
+
+#[test]
+fn tower_layer_assignment_recipe_joins_native_and_wire_batches() {
+    for native in [false, true] {
+        let mut s = session(6);
+        let a = run(&mut s, json!({"type":"draw","kind":"point","p":[0,0]}));
+        let b = run(&mut s, json!({"type":"draw","kind":"point","p":[8.4,0]}));
+        let first = a["handles"][0].as_u64().unwrap();
+        assert_eq!(b["handles"][0], first + 1);
+        let input = json!({"type":"batch","commands":[
+            {"type":"new_layer","name":"S-COLUMN"},
+            {"type":"generate","vars":{"first":first},"loops":[{"var":"i","count":2}],
+             "commands":[{"type":"set_property","prop":"layer","target":{"handle":"=first+i"},"value":"S-COLUMN"}]}
+        ]});
+        if native {
+            s.run(serde_json::from_value(input).unwrap()).unwrap();
+        } else {
+            run(&mut s, input);
+        }
+        assert!(s
+            .drawing
+            .entities_in("*Model_Space")
+            .all(|e| e.common().layer == "S-COLUMN"));
+        assert!(s.undo());
+        assert!(s.drawing.doc.layers.get("S-COLUMN").is_none());
+        assert!(s
+            .drawing
+            .entities_in("*Model_Space")
+            .all(|e| e.common().layer == "0"));
+        assert!(s.redo());
+        assert!(s
+            .drawing
+            .entities_in("*Model_Space")
+            .all(|e| e.common().layer == "S-COLUMN"));
+    }
+}
+
+#[test]
+fn batch_recipe_failure_has_full_pointer_and_iteration_and_restores_every_step() {
+    let mut s = session(6);
+    let before = s.revision();
+    let error = s.run_input(&json!({"type":"batch","layer":"S-COLUMN","commands":[
+        {"type":"draw","kind":"point","p":[0,0]},
+        {"type":"generate","loops":[{"var":"i","count":3}],"commands":[
+            {"type":"draw","kind":"circle","centre":["=i*8.4",0],"radius":"=if(i==2,'bad',0.35)"}
+        ]}
+    ]}), Source::Ai).unwrap_err().to_string();
+    assert!(error.contains("/commands/1/commands/0/radius"), "{error}");
+    assert!(
+        error.contains("iteration 3") && error.contains("\"i\":2"),
+        "{error}"
+    );
+    assert_eq!(s.revision(), before);
+    assert_eq!(s.drawing.entities_in("*Model_Space").count(), 0);
+    assert!(s.drawing.doc.layers.get("S-COLUMN").is_none());
+    assert_eq!(s.current.layer, "0");
+    assert!(!s.undo());
+    run(
+        &mut s,
+        json!({"type":"generate","commands":[{"type":"draw","kind":"point","p":[0,0]}]}),
+    );
+}
+
+#[test]
+fn batch_counts_ordinary_commands_and_sibling_recipe_visits() {
+    let mut s = session(6);
+    let error = s
+        .run_input(
+            &json!({"type":"batch","commands":[
+                {"type":"draw","kind":"point","p":[0,0]},
+                {"type":"generate","loops":[{"var":"i","count":20000}],
+                 "commands":[{"type":"draw","kind":"point","p":["=i",0]}]}
+            ]}),
+            Source::Ai,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("20000"), "{error}");
+    assert!(!s.undo());
+    let recipe = json!({"type":"generate","loops":[{"var":"i","count":60000}],"when":"false",
+        "commands":[{"type":"draw","kind":"point","p":["=i",0]}]});
+    let error = s
+        .run_input(
+            &json!({"type":"batch","commands":[recipe, recipe]}),
+            Source::Ai,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("100000") && error.contains("/commands/1/loops/0"),
+        "{error}"
+    );
+    assert_eq!(s.drawing.entities_in("*Model_Space").count(), 0);
+    assert!(!s.undo());
 }

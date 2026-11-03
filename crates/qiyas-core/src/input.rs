@@ -351,7 +351,7 @@ impl Session {
                     grouped.next().expect("one result per input")
                 } else {
                     session
-                        .run_input(input, source)
+                        .with_batch_step(index, |session| session.run_input(input, source))
                         .map_err(|error| CoreError::Step {
                             index,
                             label: crate::registry::parse_command(input.clone())

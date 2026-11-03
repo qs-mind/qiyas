@@ -863,3 +863,180 @@ fn a_row_grows_to_hold_its_wrapped_text() {
         table.rows[1].height
     );
 }
+
+#[test]
+fn tower_schedule_scales_on_its_sheet_and_rotates_with_rebuilt_text_and_one_undo() {
+    use qiyas_core::Source;
+    use serde_json::json;
+    for factor in [1.8, 2.0] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Session::new_blank(&dir.path().join("tower.dwg"), 6);
+        let sheet = "A-102 Enlarged Core and Schedules";
+        s.run_input(
+            &json!({"type":"new_layout","name":sheet,"paper":"ISO A1"}),
+            Source::Ai,
+        )
+        .unwrap();
+        let added = s
+            .run_input(
+                &json!({"type":"table","sheet":sheet,"at":[510,455],
+            "rows":2,"cols":2,"col_width":40,"row_height":10,
+            "data":[["Tower schedule",""],["%<\\AcVar Filename>%","30 storeys"]]}),
+                Source::Ai,
+            )
+            .unwrap();
+        let h = one(added.outcome);
+        s.run_input(&json!({"type":"merge_cells","sheet":sheet,"target":{"handle":h},"first":[0,0],"last":[0,1]}), Source::Ai).unwrap();
+        let before = table(&s, h);
+        let heights = |s: &Session| -> Vec<f64> {
+            let t = table(s, h);
+            s.drawing
+                .doc
+                .entities_in_block(&t.block_name)
+                .filter_map(|e| match e {
+                    EntityType::MText(m) => Some(m.height),
+                    _ => None,
+                })
+                .collect()
+        };
+        let text_before = heights(&s);
+        s.run_input(
+            &json!({"type":"modify","kind":"scale","sheet":sheet,
+            "targets":[{"handle":h}],"base":[510,455],"factor":factor}),
+            Source::Ai,
+        )
+        .unwrap();
+        assert_eq!(s.sheet, "*Model_Space");
+        let scaled = table(&s, h);
+        assert_eq!(scaled.insertion_point, before.insertion_point);
+        assert_eq!(texts(&scaled), texts(&before));
+        assert_eq!(scaled.merged_ranges, before.merged_ranges);
+        assert_eq!(scaled.common.extended_data, before.common.extended_data);
+        for (a, b) in scaled.rows.iter().zip(&before.rows) {
+            assert!((a.height - b.height * factor).abs() < 1e-8);
+        }
+        for (a, b) in scaled.columns.iter().zip(&before.columns) {
+            assert!((a.width - b.width * factor).abs() < 1e-8);
+        }
+        for (a, b) in heights(&s).iter().zip(&text_before) {
+            assert!((a - b * factor).abs() < 1e-8);
+        }
+        assert!(s.undo_if(Source::Ai));
+        assert_eq!(table(&s, h), before);
+        assert_eq!(heights(&s), text_before);
+        assert!(s.redo());
+        s.run_input(
+            &json!({"type":"modify","kind":"rotate","sheet":sheet,
+            "targets":[{"handle":h}],"base":[500,450],"angle":90}),
+            Source::Ai,
+        )
+        .unwrap();
+        let turned = table(&s, h);
+        assert!((turned.insertion_point.x - 495.0).abs() < 1e-8);
+        assert!((turned.insertion_point.y - 460.0).abs() < 1e-8);
+        assert!(turned.horizontal_direction.x.abs() < 1e-8);
+        assert!((turned.horizontal_direction.y - 1.0).abs() < 1e-8);
+        assert_eq!(turned.columns, scaled.columns);
+        assert_eq!(texts(&turned), texts(&before));
+        assert_eq!(
+            qiyas_geom::table_cell_at(&turned, [496.0, 461.0]),
+            Some((0, 0))
+        );
+        assert!(s.undo_if(Source::Ai));
+        assert_eq!(table(&s, h), scaled);
+        assert!(s.redo());
+        let path = dir.path().join("scaled-tower.dwg");
+        s.save_as(&path).unwrap();
+        let reopened = Session::open(&path).unwrap();
+        let saved = table(&reopened, h);
+        assert!((saved.total_width() - turned.total_width()).abs() < 1e-8);
+        assert!((saved.horizontal_direction.y - 1.0).abs() < 1e-8);
+        assert_eq!(block_texts(&reopened, h), block_texts(&s, h));
+    }
+}
+
+#[test]
+fn scaling_a_shared_table_block_and_rotating_a_copy_leave_the_other_table_alone() {
+    let mut s = Session::new_blank(std::path::Path::new("/tmp/tower-shared-table.dwg"), 6);
+    let h = new_table(&mut s, [510.0, 455.0], &[&["Tower schedule"]]);
+    let mut shared = table(&s, h);
+    shared.common.handle = Handle::NULL;
+    shared.insertion_point.x += 100.0;
+    shared.block_name.clear();
+    let other = s
+        .drawing
+        .doc
+        .add_entity(EntityType::Table(shared))
+        .unwrap()
+        .value();
+    let untouched = table(&s, other);
+    let block = qiyas_geom::table_block(&s.drawing.doc, &untouched)
+        .unwrap()
+        .clone();
+    s.run(Command::Modify(ModifySpec::Scale {
+        targets: vec![t(h)],
+        base: [510.0, 455.0],
+        factor: 2.0,
+        copy: false,
+    }))
+    .unwrap();
+    assert_eq!(table(&s, other), untouched);
+    assert_ne!(
+        table(&s, h).block_record_handle,
+        untouched.block_record_handle
+    );
+    assert_eq!(
+        s.drawing
+            .doc
+            .block_records
+            .get(&block.name)
+            .unwrap()
+            .entity_handles,
+        block.entity_handles
+    );
+    let scaled = table(&s, h);
+    let copied = one(s
+        .run(Command::Modify(ModifySpec::Rotate {
+            targets: vec![t(h)],
+            base: [510.0, 455.0],
+            angle: 90.0,
+            copy: true,
+        }))
+        .unwrap());
+    assert_eq!(table(&s, h), scaled);
+    assert!((table(&s, copied).horizontal_direction.y - 1.0).abs() < 1e-8);
+    assert_ne!(
+        table(&s, copied).block_record_handle,
+        scaled.block_record_handle
+    );
+    assert!(s.undo());
+    assert!(s.drawing.doc.get_entity(Handle::new(copied)).is_none());
+    assert_eq!(table(&s, h), scaled);
+    let scaled_copy = one(s
+        .run(Command::Modify(ModifySpec::Scale {
+            targets: vec![t(h)],
+            base: [510.0, 455.0],
+            factor: 1.8,
+            copy: true,
+        }))
+        .unwrap());
+    assert!((table(&s, scaled_copy).total_width() - scaled.total_width() * 1.8).abs() < 1e-8);
+    assert_eq!(table(&s, h), scaled);
+    assert_ne!(
+        table(&s, scaled_copy).block_record_handle,
+        scaled.block_record_handle
+    );
+    assert!(s.undo());
+    assert!(s.drawing.doc.get_entity(Handle::new(scaled_copy)).is_none());
+    let error = s
+        .run(Command::Modify(ModifySpec::Mirror {
+            targets: vec![t(h)],
+            p1: [0.0, 0.0],
+            p2: [0.0, 1.0],
+            keep: false,
+        }))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cannot be mirrored"), "{error}");
+    assert_eq!(table(&s, h), scaled);
+}

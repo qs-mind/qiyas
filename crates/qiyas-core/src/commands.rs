@@ -608,6 +608,7 @@ pub enum Command {
     /// command's outcome and every entity added. A batch consisting only of independent
     /// opening additions validates each input in order and rebuilds each wall once; those
     /// outcomes share the final wall state. Mixed commands and step references stay sequential.
+    /// Generate steps expand in place, sharing limits and the transaction; nested batches are refused.
     #[schemars(extend("x-category" = "draw", "x-batch" = false))]
     #[schemars(example = json!({"type": "batch", "commands": [{"type": "new_layer", "name": "A-WALL"}, {"type": "set_current", "current": {"layer": "A-WALL"}}, {"type": "draw", "kind": "rectangle", "a": [0, 0], "b": [5, 4]}]}))]
     #[schemars(example = json!({"type": "batch", "layer": "A-DOOR", "commands": [{"type": "draw", "kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}, {"type": "draw", "kind": "line", "a": [0, 0], "b": [0.9, 0]}]}))]
@@ -621,7 +622,8 @@ pub enum Command {
     /// Computes drawing geometry from a bounded recipe, then runs ordinary commands as one
     /// batch transaction and one undo step. No scripts, code or file imports. Define blocks
     /// once (before the recipe or with a first-iteration when), then repeat with insert_block.
-    /// Loops nest in array order;
+    /// May be a batch step: expands there with shared limits and the same undo transaction.
+    /// A generate or batch inside its templates is refused. Loops nest in array order;
     /// count starts at 0, ranges include to, and when=false skips an iteration. Vars can use
     /// other vars and active loop variables. Numeric or string fields accept "=expr"; strings
     /// accept "{expr}" (double braces escape braces). Expressions share the quantity language:
@@ -634,12 +636,12 @@ pub enum Command {
     /// Limits: 20000 commands, 100000 loop visits, 8 loops, 128 vars, 128 expression depth,
     /// 4096 expression nodes, 65536 expression bytes, 8388608 evaluation work units,
     /// 1048576 recipe bytes, 16777216 expanded bytes, 32 template depth, 4096 path vertices,
-    /// 65536 generated string bytes and 100000 entity changes across the whole recipe.
+    /// 65536 generated string bytes and 100000 entity changes across the whole batch.
     /// Returns iterations (including skipped), skipped, handles by template and by iteration,
     /// with each step's defaults and warnings. Handles include additions, changes and removals.
     /// Work charges expression bytes and 32 units per path vertex or station.
     /// Errors name the template pointer and loop values.
-    #[schemars(extend("x-category" = "draw", "x-batch" = false))]
+    #[schemars(extend("x-category" = "draw"))]
     #[schemars(example = json!({"type":"generate","vars":{"pitch":"2.4*unit"},"loops":[{"var":"desk","count":40}],"commands":[{"when":"desk==0","type":"define_block","name":"PROJECT-DESK","base":[0,0],"entities":[{"type":"Line","data":{"start":{"x":"=-0.8*unit","y":"=0*unit","z":0},"end":{"x":"=0.8*unit","y":"=0*unit","z":0}}},{"type":"Line","data":{"start":{"x":"=0.8*unit","y":"=0*unit","z":0},"end":{"x":"=0.8*unit","y":"=0.8*unit","z":0}}},{"type":"Line","data":{"start":{"x":"=0.8*unit","y":"=0.8*unit","z":0},"end":{"x":"=-0.8*unit","y":"=0.8*unit","z":0}}},{"type":"Line","data":{"start":{"x":"=-0.8*unit","y":"=0.8*unit","z":0},"end":{"x":"=-0.8*unit","y":"=0*unit","z":0}}}]},{"when":"desk==0","type":"define_block","name":"PROJECT-CHAIR","base":[0,0],"entities":[{"type":"Line","data":{"start":{"x":"=-0.25*unit","y":"=-0.25*unit","z":0},"end":{"x":"=0.25*unit","y":"=-0.25*unit","z":0}}},{"type":"Line","data":{"start":{"x":"=0.25*unit","y":"=-0.25*unit","z":0},"end":{"x":"=0.25*unit","y":"=0.25*unit","z":0}}},{"type":"Line","data":{"start":{"x":"=0.25*unit","y":"=0.25*unit","z":0},"end":{"x":"=-0.25*unit","y":"=0.25*unit","z":0}}},{"type":"Line","data":{"start":{"x":"=-0.25*unit","y":"=0.25*unit","z":0},"end":{"x":"=-0.25*unit","y":"=-0.25*unit","z":0}}}]},{"type":"insert_block","name":"PROJECT-DESK","at":["=desk*pitch",0]},{"type":"insert_block","name":"PROJECT-CHAIR","at":["=desk*pitch","=-0.65*unit"],"rotation":180}]}))]
     #[schemars(example = json!({"type":"generate","vars":{"rise":"0.175*unit","going":"0.28*unit","n":20,"width":"1.5*unit","nose":"0.025*unit"},"loops":[{"var":"tread","count":"n"}],"commands":[{"type":"draw","kind":"line","a":[0,"=tread*going"],"b":["=width","=tread*going"]},{"type":"draw","kind":"line","a":[0,"=tread*going+nose"],"b":["=width","=tread*going+nose"]},{"when":"tread==n-1","type":"draw","kind":"line","a":[0,0],"b":[0,"=n*going"]},{"when":"tread==n-1","type":"draw","kind":"line","a":["=width",0],"b":["=width","=n*going"]},{"when":"tread==n-1","type":"draw","kind":"line","a":[0,"=n*going"],"b":["=width","=n*going"]},{"when":"tread==n-1","type":"draw","kind":"line","a":["=width/2",0],"b":["=width/2","=n*going+0.6*unit"]},{"when":"tread==n-1","type":"draw","kind":"line","a":["=width/2","=n*going+0.6*unit"],"b":["=width/2-0.15*unit","=n*going+0.3*unit"]},{"when":"tread==n-1","type":"draw","kind":"line","a":["=width/2","=n*going+0.6*unit"],"b":["=width/2+0.15*unit","=n*going+0.3*unit"]},{"when":"tread==n-1","type":"text","at":["=width+0.5*unit","=n*going+0.3*unit"],"value":"UP {n} x {round(rise/unit,3)} m"}]}))]
     #[schemars(example = json!({"type":"generate","vars":{"pitch":"8*unit"},"loops":[{"var":"col","count":6},{"var":"row","count":4}],"commands":[{"type":"draw","kind":"rectangle","a":["=col*pitch","=row*pitch"],"b":["=col*pitch+0.6*unit","=row*pitch+0.6*unit"]},{"type":"text","at":["=col*pitch","=row*pitch+unit"],"value":"C{col+1}-{row+1}"}]}))]

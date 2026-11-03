@@ -50,6 +50,7 @@ pub enum ModifySpec {
         count: u32,
     },
     /// Turns them `angle` about `base`; with `copy`, turns a copy and keeps them.
+    /// Tables turn their horizontal direction and rebuild their blocks.
     #[schemars(example = json!({"kind": "rotate", "targets": [{"handle": 1234}], "base": [0, 0], "angle": 90}))]
     #[schemars(extend("x-words" = ["ROTATE", "RO"]))]
     Rotate {
@@ -60,6 +61,7 @@ pub enum ModifySpec {
         copy: bool,
     },
     /// Scales them by `factor` (above 0) about `base`; with `copy`, scales a copy.
+    /// Tables rebuild their blocks with scaled text, row heights and column widths.
     #[schemars(example = json!({"kind": "scale", "targets": [{"handle": 1234}], "base": [0, 0], "factor": 2}))]
     #[schemars(extend("x-words" = ["SCALE", "SC"]))]
     Scale {
@@ -209,15 +211,21 @@ fn finite(values: &[f64]) -> Result<(), CoreError> {
     }
 }
 
-/// Whether `e` can be placed (and with `copying`, copied); why not. Dimensions and tables are
-/// drawn from a block of their own, which isn't made again yet: they only move or copy by a
-/// `translation` (their block moving with them).
-fn check_placeable(e: &EntityType, copying: bool, translation: bool) -> Result<(), CoreError> {
+/// Whether an entity supports this placement and, when requested, copying.
+fn check_placeable(
+    e: &EntityType,
+    copying: bool,
+    translation: bool,
+    table_transform: bool,
+) -> Result<(), CoreError> {
     let h = e.common().handle.value();
     let refuse = |why: &str| Err(invalid(format!("{} {h} {why}", variant_name(e))));
     match e {
-        EntityType::Dimension(_) | EntityType::Table(_) if !translation => {
+        EntityType::Dimension(_) if !translation => {
             refuse("can only be moved or copied yet: its block is not drawn again")
+        }
+        EntityType::Table(_) if !translation && !table_transform => {
+            refuse("cannot be mirrored or stretched; move, copy, scale or rotate the table instead")
         }
         EntityType::Viewport(_)
         | EntityType::Light(_)
@@ -275,6 +283,12 @@ pub(crate) fn place(e: &mut EntityType, p: &Placing) {
         // A reflected local frame needs both its X direction and its handedness. Point
         // normals are native DWG/DXF data, so this also survives reopening without xdata edits.
         point.normal.z = normal_z;
+    }
+    if let EntityType::Table(table) = &mut *e {
+        let factor = p.transform.apply_rotation(Vector3::UNIT_X).length();
+        if (factor - 1.0).abs() > 1e-12 {
+            crate::table::scale_table_text(table, factor);
+        }
     }
     crate::object_regions::transform_region_source(e, &p.transform);
     e.common_mut().graphic_data = None;
@@ -613,7 +627,12 @@ impl Session {
     /// Places every entity `handles` by `p`, in place; the take-off rows measuring them follow.
     fn place_all(&mut self, handles: &[Handle], p: Placing) -> Result<Outcome, CoreError> {
         for &h in handles {
-            check_placeable(self.entity(h), false, p.shift.is_some())?;
+            check_placeable(
+                self.entity(h),
+                false,
+                p.shift.is_some(),
+                p.mirror_line.is_none(),
+            )?;
         }
         for &h in handles {
             if let Some(object) = crate::objects::instance(self.entity(h)) {
@@ -632,6 +651,9 @@ impl Session {
             }
             let e = self.drawing.doc.get_entity_mut(h).expect("checked above");
             let dimension_block = place_keeping_blocks(e, &p);
+            if matches!(e, EntityType::Table(_)) && p.shift.is_none() {
+                self.rebuild_table(h)?;
+            }
             if let (Some(name), Some(d)) = (dimension_block, p.shift) {
                 self.shift_block(&name, d);
             }
@@ -669,7 +691,12 @@ impl Session {
         }
         for &h in handles {
             let translations = copies.iter().all(|p| p.shift.is_some());
-            check_placeable(self.entity(h), true, translations)?;
+            check_placeable(
+                self.entity(h),
+                true,
+                translations,
+                copies.iter().all(|p| p.mirror_line.is_none()),
+            )?;
         }
         let owner = self.sheet_owner();
         let mut added = Vec::with_capacity(handles.len() * copies.len());
@@ -699,7 +726,12 @@ impl Session {
                     }
                     _ => {}
                 }
-                added.push(self.add_fresh(copy, owner)?);
+                let rebuild = matches!(copy, EntityType::Table(_)) && p.shift.is_none();
+                let handle = self.add_fresh(copy, owner)?;
+                if rebuild {
+                    self.rebuild_table(Handle::new(handle))?;
+                }
+                added.push(handle);
             }
             self.copied_wall_groups(&added[start..], p.mirror_line.is_some())?;
         }
@@ -765,7 +797,7 @@ impl Session {
         delta: [f64; 2],
     ) -> Result<Outcome, CoreError> {
         for &h in handles {
-            check_placeable(self.entity(h), false, false)?;
+            check_placeable(self.entity(h), false, false, false)?;
         }
         let [lo, hi] = window;
         let inside = |p: Vector3| lo[0] <= p.x && p.x <= hi[0] && lo[1] <= p.y && p.y <= hi[1];
@@ -1215,7 +1247,8 @@ impl Session {
         let tables = targets
             .iter()
             .any(|t| match doc.get_entity(Handle::new(t.handle)) {
-                Some(EntityType::Dimension(_) | EntityType::Table(_)) => copying,
+                Some(EntityType::Dimension(_)) => copying,
+                Some(EntityType::Table(_)) => true,
                 Some(EntityType::RasterImage(_) | EntityType::Underlay(_)) => erasing,
                 _ => false,
             })

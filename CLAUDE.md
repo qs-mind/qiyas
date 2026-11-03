@@ -1099,7 +1099,9 @@ without parsing an ever-growing expression. No new standard or measurement facts
 - `generate` (`generate.rs`, `Command::Generate`) evaluates data-only geometry recipes through
   `qiyas-param::expr`, then runs the expanded wire commands through the same `batch_with`
   transaction as `Command::Batch`. One undo step; any expansion, validation or runtime failure
-  leaves the drawing unchanged. No code, scripts, file imports or nested batches/generators.
+  leaves the drawing unchanged. A recipe may be a batch step: it expands at that step, sees
+  earlier edits, and shares the transaction and cumulative limits with every other step.
+  No code, scripts, file imports, generate inside generate, or batch inside a recipe template.
   `vars` are expressions, `loops` nest in array order (`count` is zero-based; `from/to/step`
   includes the end); bounds and variables may use outer loop values. `when` keeps true/nonzero
   iterations; a template's own `when` keeps only that command. `=expr` returns a typed field;
@@ -1108,15 +1110,17 @@ without parsing an ever-growing expression. No new standard or measurement facts
   `unit` is drawing units per metre, as in symbol recipes. `along` takes an existing line, arc,
   circle or lightweight polyline handle, or connected `points`, plus `spacing` or `count`.
   Stations expose `x,y,angle` (tangent degrees) and the zero-based loop index. Counts include
-  open-path ends; closed paths never repeat their start. Paths are read before edits execute.
+  open-path ends; closed paths never repeat their start. Paths are read when the recipe step
+  expands, before its own edits execute.
   Limits name their refusal: 20,000 expanded commands, 100,000 loop visits and entity changes,
-  8 nested loops, 128 variables, expression depth 128/nodes 4,096/bytes 65,536, recipe 1 MiB,
+  8 nested loops, 128 variables, expression depth 128/nodes 4,096/bytes 65,536, total recipe data 1 MiB,
   expanded JSON budget 16 MiB, template depth 32, path vertices 4,096, generated strings
   65,536 bytes. An 8,388,608 work budget charges expression bytes and 32 per path vertex or
   station, including paths with zero stations. Variables are ordered without recursive lookup.
   `Outcome::Generated` gives visited `iterations`, `skipped`, `templates` (count and handles),
   `steps` (template index, one-based iteration, loop values, touched handles, defaults/warnings)
-  and final `added` handles. Failures carry `/commands/i/...` and the offending iteration values.
+  and final `added` handles. Failures carry `/commands/i/...` (inside a batch,
+  `/commands/i/commands/j/...`) and the offending iteration values.
   Mizan/MCP use `qiyas_execute` op `run` with the recipe as `command`; registry examples cover
   desks/chairs, stairs, a labelled 6×4 column grid, seats along an existing arc, and room hatches.
   The drawing kit includes a complete `generate` form and a filled grid example; take-off kit
@@ -1452,7 +1456,10 @@ without parsing an ever-growing expression. No new standard or measurement facts
   `*T` block again (`rebuild_table`; a block another table shares gets a fresh `*Tn` instead).
   A table's block is found by name, else by `block_record_handle` (the DWG reader sets only the
   handle; `qiyas_geom::table_block`), also when copying. Find and replace reaches cells. Qiyas's
-  tables are marked `QIYAS_TEXT` (reading order).
+  tables are marked `QIYAS_TEXT` (reading order). Scale and rotate rebuild the `*T` block in
+  the same undo step, including copies: scale changes text heights, padding, row heights and
+  column widths; rotate turns the table direction about the given base. Shared blocks stay
+  unchanged for other tables. Field codes and merged cells survive. Mirror stays refused.
 - `Table` sizes can be omitted or zero. The row height is twice the default text height
   (2.5 mm on paper at the annotation scale). The column width fits the longest cell text,
   allowing about 0.7 text heights per character and one row height of padding.

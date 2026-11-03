@@ -14,9 +14,45 @@ use crate::{CoreError, Outcome, Session, Source};
 const MAX_COMMANDS: usize = 20_000;
 const MAX_VISITS: usize = 100_000;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RECIPE_BYTES: usize = 1024 * 1024;
 const MAX_EVAL_WORK: usize = 8 * 1024 * 1024;
 const MAX_PATH: usize = 4096;
 const MAX_ENTITY_WORK: usize = 100_000;
+
+/// Work shared by all recipes and ordinary steps in the outer transaction.
+#[derive(Clone, Default)]
+pub(crate) struct Budget {
+    pub active: bool,
+    pub generating: bool,
+    pub commands: usize,
+    pub visits: usize,
+    pub bytes: usize,
+    pub recipe_bytes: usize,
+    pub work: usize,
+    pub entities: usize,
+}
+
+impl Budget {
+    pub fn check(&self) -> Result<(), CoreError> {
+        if self.active {
+            for (used, limit, name) in [
+                (self.commands, MAX_COMMANDS, "Expanded command"),
+                (self.visits, MAX_VISITS, "Loop visit"),
+                (self.bytes, MAX_BYTES, "Expanded JSON bytes"),
+                (self.recipe_bytes, MAX_RECIPE_BYTES, "Recipe size bytes"),
+                (self.work, MAX_EVAL_WORK, "Evaluation work"),
+                (self.entities, MAX_ENTITY_WORK, "Entity change"),
+            ] {
+                if used > limit {
+                    return Err(invalid(format!(
+                        "{name} limit {limit} exceeded across the batch"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 /// A literal number or an expression, with an optional leading `=`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -115,7 +151,7 @@ struct Variable {
     cost: usize,
 }
 
-fn variable_order(vars: &BTreeMap<String, Variable>) -> Result<Vec<String>, CoreError> {
+fn variable_order(vars: &BTreeMap<String, Variable>, path: &str) -> Result<Vec<String>, CoreError> {
     let mut pending: BTreeMap<_, _> = vars
         .iter()
         .map(|(name, var)| {
@@ -137,7 +173,7 @@ fn variable_order(vars: &BTreeMap<String, Variable>) -> Result<Vec<String>, Core
             .map(|(name, _)| name.clone())
         else {
             return Err(at(
-                "/vars",
+                &format!("{path}/vars"),
                 format!(
                     "Circular variable dependencies: {}",
                     pending.keys().cloned().collect::<Vec<_>>().join(", ")
@@ -223,6 +259,8 @@ struct Expansion<'a> {
     skipped: usize,
     output: Cell<usize>,
     commands: Vec<Expanded>,
+    prior_commands: usize,
+    path: String,
 }
 
 impl Expansion<'_> {
@@ -257,7 +295,7 @@ impl Expansion<'_> {
                 if !scope
                     .eval(when)
                     .and_then(|v| v.as_bool())
-                    .map_err(|e| context(at("/when", e)))?
+                    .map_err(|e| context(at(&format!("{}/when", self.path), e)))?
                 {
                     self.skipped += 1;
                     return Ok(());
@@ -266,11 +304,11 @@ impl Expansion<'_> {
             for name in self.vars.keys() {
                 scope
                     .eval(name)
-                    .map_err(|e| context(at(&format!("/vars/{name}"), e)))?;
+                    .map_err(|e| context(at(&format!("{}/vars/{name}", self.path), e)))?;
             }
             let mut inputs = Vec::new();
             for (template, command) in self.recipe.commands.iter().enumerate() {
-                let prefix = format!("/commands/{template}");
+                let prefix = format!("{}/commands/{template}", self.path);
                 if let Some(when) = command.get("when") {
                     let when = when.as_str().ok_or_else(|| {
                         context(at(&format!("{prefix}/when"), "Expected an expression"))
@@ -283,7 +321,7 @@ impl Expansion<'_> {
                         continue;
                     }
                 }
-                if self.commands.len() + inputs.len() >= MAX_COMMANDS {
+                if self.prior_commands + self.commands.len() + inputs.len() >= MAX_COMMANDS {
                     return Err(context(at(
                         &prefix,
                         format!("Expanded command limit {MAX_COMMANDS} exceeded"),
@@ -309,7 +347,7 @@ impl Expansion<'_> {
             return Ok(());
         }
         let item = &self.recipe.loops[depth];
-        let prefix = format!("/loops/{depth}");
+        let prefix = format!("{}/loops/{depth}", self.path);
         let scope = self.scope(&values);
         let stations = loop_values(self.session, item, &scope)
             .map_err(|e| at(&prefix, format!("{}: {e}", json!(values))))?;
@@ -442,6 +480,14 @@ fn safe_command(input: &Value) -> Result<(), CoreError> {
     let name = input["type"]
         .as_str()
         .ok_or_else(|| invalid("A command needs a literal type"))?;
+    if name == "generate" {
+        return Err(invalid("generate cannot run inside generate"));
+    }
+    if name == "batch" {
+        return Err(invalid(
+            "batch cannot run inside generate; put its commands directly in the recipe templates",
+        ));
+    }
     let registry = crate::registry::registry();
     let info = registry
         .get(name)
@@ -675,9 +721,21 @@ impl Session {
         recipe: Recipe,
         source: Source,
     ) -> Result<Outcome, CoreError> {
-        if self.tx_depth > 0 {
-            return Err(invalid("generate cannot run inside another batch"));
+        if self.recipe_budget.generating {
+            return Err(invalid("generate cannot run inside generate"));
         }
+        self.batch_with(source, "generate", None, None, |session| {
+            session.recipe_budget.active = true;
+            session.recipe_budget.check()?;
+            session.recipe_budget.generating = true;
+            let result = session.generate_steps(recipe, source);
+            session.recipe_budget.generating = false;
+            result
+        })
+    }
+
+    fn generate_steps(&mut self, recipe: Recipe, source: Source) -> Result<Outcome, CoreError> {
+        let path = self.batch_step_path.clone();
         if recipe.loops.len() > 8 {
             return Err(invalid("Loop nesting limit 8 exceeded"));
         }
@@ -685,25 +743,25 @@ impl Session {
             return Err(invalid("Variable count limit 128 exceeded"));
         }
         if recipe.commands.is_empty() {
-            return Err(at("/commands", "Give at least one command template"));
+            return Err(at(
+                &format!("{path}/commands"),
+                "Give at least one command template",
+            ));
         }
         if recipe.commands.len() > MAX_COMMANDS {
             return Err(invalid(format!(
                 "Expanded command limit {MAX_COMMANDS} exceeded"
             )));
         }
-        if serde_json::to_vec(&recipe)
+        self.recipe_budget.recipe_bytes += serde_json::to_vec(&recipe)
             .map_err(|e| invalid(e.to_string()))?
-            .len()
-            > 1024 * 1024
-        {
-            return Err(invalid("Recipe size limit 1048576 bytes exceeded"));
-        }
+            .len();
+        self.recipe_budget.check()?;
         let mut names = BTreeSet::from(["unit".to_owned(), "x".into(), "y".into(), "angle".into()]);
         for (index, item) in recipe.loops.iter().enumerate() {
             if !qiyas_param::expr::is_name(&item.var) || !names.insert(item.var.clone()) {
                 return Err(at(
-                    &format!("/loops/{index}/var"),
+                    &format!("{path}/loops/{index}/var"),
                     "Use a unique, nonreserved variable name",
                 ));
             }
@@ -712,7 +770,7 @@ impl Session {
         for (name, scalar) in &recipe.vars {
             if !qiyas_param::expr::is_name(name) || !names.insert(name.clone()) {
                 return Err(at(
-                    &format!("/vars/{name}"),
+                    &format!("{path}/vars/{name}"),
                     "Use a unique, nonreserved variable name",
                 ));
             }
@@ -721,7 +779,7 @@ impl Session {
                 Scalar::Expression(s) => s.clone(),
             };
             let expr = Expr::parse(text.strip_prefix('=').unwrap_or(&text))
-                .map_err(|e| at(&format!("/vars/{name}"), e))?;
+                .map_err(|e| at(&format!("{path}/vars/{name}"), e))?;
             vars.insert(
                 name.clone(),
                 Variable {
@@ -730,94 +788,148 @@ impl Session {
                 },
             );
         }
-        let order = variable_order(&vars)?;
+        let order = variable_order(&vars, &path)?;
         let mut expansion = Expansion {
             session: self,
             recipe: &recipe,
             vars,
             order,
-            work: Cell::new(MAX_EVAL_WORK),
-            visits: 0,
+            work: Cell::new(MAX_EVAL_WORK - self.recipe_budget.work),
+            visits: self.recipe_budget.visits,
             iterations: 0,
             skipped: 0,
-            output: Cell::new(MAX_BYTES),
+            output: Cell::new(MAX_BYTES - self.recipe_budget.bytes),
             commands: Vec::new(),
+            prior_commands: self.recipe_budget.commands,
+            path: self.batch_step_path.clone(),
         };
         expansion.walk(0, BTreeMap::new())?;
         let Expansion {
             commands,
             iterations,
             skipped,
+            visits,
+            work,
+            output,
             ..
         } = expansion;
-        self.batch_with(source, "generate", None, None, |session| {
-            let mut steps = Vec::with_capacity(commands.len());
-            let mut templates: Vec<_> = (0..recipe.commands.len())
-                .map(|template| TemplateResult {
-                    template,
-                    count: 0,
-                    handles: Vec::new(),
-                })
-                .collect();
-            let progress = crate::batch_progress::Batch::new(commands.len());
-            let mut entity_work = 0;
-            for (index, expanded) in commands.into_iter().enumerate() {
-                let Expanded {
-                    mut input,
-                    template,
-                    iteration,
-                    values,
-                } = expanded;
-                let prefix = format!("/commands/{template}");
-                let context = |error| {
-                    invalid(format!(
-                        "{prefix}, iteration {iteration} {}: {error}",
-                        json!(values)
-                    ))
-                };
-                session.resolve_input_handles(&mut input).map_err(context)?;
-                let mut validation = session.validate_input(&input);
-                if !validation.valid {
-                    for issue in &mut validation.errors {
-                        issue.pointer = format!("{prefix}{}", issue.pointer);
-                    }
-                    return Err(context(invalid(validation.message())));
-                }
-                let mut previous = std::mem::take(&mut session.last_change);
-                let report = session.run_input(&input, source);
-                let change = std::mem::take(&mut session.last_change);
-                let mut handles = change.added.clone();
-                handles.extend(change.changed.iter().copied());
-                handles.extend(change.removed.iter().copied());
-                previous.merge(change);
-                session.last_change = previous;
-                let report = report.map_err(context)?;
-                entity_work += handles.len();
-                if entity_work > MAX_ENTITY_WORK {
-                    return Err(context(invalid(format!(
-                        "Entity change limit {MAX_ENTITY_WORK} exceeded"
-                    ))));
-                }
-                let result = &mut templates[template];
-                result.count += 1;
-                result.handles.extend(handles.iter().copied());
-                steps.push(Step {
-                    template,
-                    iteration,
-                    values,
-                    handles,
-                    defaults_used: report.defaults_used,
-                    warnings: report.warnings,
-                });
-                progress.completed(index + 1, &input);
-            }
-            Ok(Outcome::Generated {
-                iterations,
-                skipped,
-                templates,
-                steps,
-                added: session.last_change.added.clone(),
+        self.recipe_budget.visits = visits;
+        self.recipe_budget.work = MAX_EVAL_WORK - work.get();
+        self.recipe_budget.bytes = MAX_BYTES - output.get();
+        let session = self;
+        let mut steps = Vec::with_capacity(commands.len());
+        let mut templates: Vec<_> = (0..recipe.commands.len())
+            .map(|template| TemplateResult {
+                template,
+                count: 0,
+                handles: Vec::new(),
             })
+            .collect();
+        let progress = crate::batch_progress::Batch::new(commands.len());
+        for (index, expanded) in commands.into_iter().enumerate() {
+            let Expanded {
+                mut input,
+                template,
+                iteration,
+                values,
+            } = expanded;
+            let prefix = format!("{}/commands/{template}", session.batch_step_path);
+            let context = |error| {
+                invalid(format!(
+                    "{prefix}, iteration {iteration} {}: {error}",
+                    json!(values)
+                ))
+            };
+            session.resolve_input_handles(&mut input).map_err(context)?;
+            let mut validation = session.validate_input(&input);
+            if !validation.valid {
+                for issue in &mut validation.errors {
+                    issue.pointer = format!("{prefix}{}", issue.pointer);
+                }
+                return Err(context(invalid(validation.message())));
+            }
+            let mut previous = std::mem::take(&mut session.last_change);
+            let report = session.run_input(&input, source);
+            let change = std::mem::take(&mut session.last_change);
+            let mut handles = change.added.clone();
+            handles.extend(change.changed.iter().copied());
+            handles.extend(change.removed.iter().copied());
+            previous.merge(change);
+            session.last_change = previous;
+            let report = report.map_err(context)?;
+            let result = &mut templates[template];
+            result.count += 1;
+            result.handles.extend(handles.iter().copied());
+            steps.push(Step {
+                template,
+                iteration,
+                values,
+                handles,
+                defaults_used: report.defaults_used,
+                warnings: report.warnings,
+            });
+            progress.completed(index + 1, &input);
+        }
+        Ok(Outcome::Generated {
+            iterations,
+            skipped,
+            templates,
+            steps,
+            added: session.last_change.added.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sibling_recipes_share_every_cumulative_budget_and_roll_back() {
+        let recipe = json!({"type":"generate","loops":[{"var":"i","count":1}],
+            "commands":[{"type":"draw","kind":"point","p":["=i+1",0]}]});
+        let mut probe = Session::new_blank(std::path::Path::new("/tmp/recipe-budget.dwg"), 6);
+        let usage = probe
+            .transaction(Source::Ai, "batch", |s| {
+                s.run_input(&recipe, Source::Ai)?;
+                Ok(s.recipe_budget.clone())
+            })
+            .unwrap();
+        for limit in [
+            "commands",
+            "visits",
+            "bytes",
+            "recipe_bytes",
+            "work",
+            "entities",
+        ] {
+            let mut s = Session::new_blank(std::path::Path::new("/tmp/recipe-budget.dwg"), 6);
+            let before = s.revision();
+            let error = s
+                .transaction(Source::Ai, "batch", |s| {
+                    // Leave room for exactly one of the two column recipes.
+                    match limit {
+                        "commands" => s.recipe_budget.commands = MAX_COMMANDS - usage.commands,
+                        "visits" => s.recipe_budget.visits = MAX_VISITS - usage.visits,
+                        "bytes" => s.recipe_budget.bytes = MAX_BYTES - usage.bytes,
+                        "recipe_bytes" => {
+                            s.recipe_budget.recipe_bytes = MAX_RECIPE_BYTES - usage.recipe_bytes
+                        }
+                        "work" => s.recipe_budget.work = MAX_EVAL_WORK - usage.work,
+                        "entities" => s.recipe_budget.entities = MAX_ENTITY_WORK - usage.entities,
+                        _ => unreachable!(),
+                    }
+                    s.with_batch_step(0, |s| s.run_input(&recipe, Source::Ai))?;
+                    s.with_batch_step(1, |s| s.run_input(&recipe, Source::Ai))
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("limit"), "{limit}: {error}");
+            assert_eq!(s.revision(), before, "{limit}");
+            assert_eq!(s.drawing.entities_in("*Model_Space").count(), 0, "{limit}");
+            assert!(!s.undo());
+            s.run_input(&recipe, Source::Ai).unwrap();
+            assert_eq!(s.drawing.entities_in("*Model_Space").count(), 1);
+        }
     }
 }

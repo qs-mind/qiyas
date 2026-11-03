@@ -143,6 +143,8 @@ pub struct Session {
     pub(crate) handle_replacements: std::collections::BTreeMap<u64, Vec<u64>>,
     /// How many transactions are open (`crate::transaction`).
     pub(crate) tx_depth: usize,
+    pub(crate) recipe_budget: crate::generate::Budget,
+    pub(crate) batch_step_path: String,
     /// The user coordinate system (see `crate::ucs`). Saved in the project file and the
     /// drawing; not an undo step.
     pub ucs: Ucs,
@@ -770,6 +772,8 @@ impl Session {
             revision_history: Default::default(),
             handle_replacements: std::collections::BTreeMap::new(),
             tx_depth: 0,
+            recipe_budget: Default::default(),
+            batch_step_path: String::new(),
             ucs,
             history: History::default(),
             block_edit: None,
@@ -1887,6 +1891,15 @@ impl Session {
         cmd: Command,
         source: Source,
     ) -> Result<Outcome, CoreError> {
+        if self.tx_depth > 0 && !matches!(cmd, Command::Generate(_) | Command::Batch { .. }) {
+            self.recipe_budget.commands += 1;
+            if !self.recipe_budget.generating {
+                self.recipe_budget.bytes += serde_json::to_vec(&cmd)
+                    .map_err(|error| CoreError::InvalidCommand(error.to_string()))?
+                    .len();
+            }
+            self.recipe_budget.check()?;
+        }
         let before = self.revision();
         let advice_before = self.last_advice.len();
         let result = self.run_command_inner(cmd, source);
@@ -2247,6 +2260,14 @@ impl Session {
         change.view = view
             .and_then(|before| ViewDelta::between(&before, &self.view_refs().get()))
             .map(Box::new);
+        let done = done.and_then(|value| {
+            if self.tx_depth > 0 {
+                self.recipe_budget.entities +=
+                    change.added.len() + change.replaced.len() + change.removed.len();
+                self.recipe_budget.check()?;
+            }
+            Ok(value)
+        });
         match done {
             Ok(done) => {
                 if !change.is_empty(&self.drawing.doc) {

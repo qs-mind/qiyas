@@ -2643,7 +2643,7 @@ fn batch(session: &mut Session, args: &Value, source: Source) -> Result<Value, T
             let label = command.label();
             let (outcome, change) = s
                 .transaction(source, &label, |s| {
-                    let outcome = s.run_input(&input, source)?;
+                    let outcome = s.with_batch_step(i, |s| s.run_input(&input, source))?;
                     Ok((outcome, s.last_change().clone()))
                 })
                 .map_err(|error| CoreError::Step {

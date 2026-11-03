@@ -110,6 +110,12 @@ impl Session {
         label: &str,
         f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        let budget_before = self.recipe_budget.clone();
+        let path_before = self.batch_step_path.clone();
+        if self.tx_depth == 0 {
+            self.recipe_budget = Default::default();
+            self.batch_step_path.clear();
+        }
         let check_before = self.check_before.clone();
         if self.tx_depth == 0 {
             self.check_before.clear();
@@ -141,6 +147,10 @@ impl Session {
                 "The edit stopped unexpectedly. Its changes were rolled back. You can keep working.".into(),
             )));
         self.tx_depth -= 1;
+        self.batch_step_path = path_before;
+        if self.tx_depth == 0 || done.is_err() {
+            self.recipe_budget = budget_before;
+        }
         match done {
             Ok(value) => {
                 let delta = ViewDelta::current_only(current, self.current.clone()).map(Box::new);
@@ -264,7 +274,7 @@ impl Session {
             for (index, command) in commands.into_iter().enumerate() {
                 let label = command.label();
                 let input = serde_json::json!(command);
-                match s.run_as(command, source) {
+                match s.with_batch_step(index, |s| s.run_as(command, source)) {
                     Ok(outcome) => {
                         progress.completed(index + 1, &input);
                         outcomes.push(outcome);
@@ -283,6 +293,19 @@ impl Session {
                 outcomes,
             })
         })
+    }
+
+    /// Keeps nested recipe diagnostics relative to their enclosing batch step.
+    pub fn with_batch_step<T>(
+        &mut self,
+        index: usize,
+        f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let previous = self.batch_step_path.clone();
+        self.batch_step_path = format!("{previous}/commands/{index}");
+        let result = f(self);
+        self.batch_step_path = previous;
+        result
     }
 
     /// What the last `run`, `run_as` or transaction did to the drawing's entities.
