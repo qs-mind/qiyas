@@ -1051,7 +1051,7 @@ impl Agent {
         let mut retry_started = None;
         let mut repeat_request: Option<TurnRequest> = None;
         let mut output_retried = false;
-        let mut retained_output = None;
+        let mut retained_output: Option<Vec<ContentBlock>> = None;
         let mut empty_continuations = 0;
         // The provider supplies its advertised limit, or its own default.
         let mut max_tokens = self.settings.max_tokens;
@@ -1188,7 +1188,7 @@ impl Agent {
                         }
                     }
                     if let Some(partial) = retained_output.take() {
-                        for block in &partial {
+                        for block in partial.iter() {
                             if let ContentBlock::Text { text } = block {
                                 self.emit(&events, AgentEvent::Text { text: text.clone() })
                                     .await;
@@ -4302,7 +4302,7 @@ mod provider_failure_tests {
                             content: vec![ContentBlock::ToolUse {
                                 id: "read".into(),
                                 name: "qiyas_read".into(),
-                                input: json!({"op":"state","args":"{}"}),
+                                input: serde_json::json!({"op":"state","args":"{}"}),
                             }],
                             stop_reason: StopReason::ToolUse,
                             usage: Usage {
