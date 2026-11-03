@@ -246,3 +246,6 @@ mod outside_check;
 
 #[path = "sheet_quality.rs"]
 mod sheet_quality;
+
+#[path = "office_inputs.rs"]
+mod office_inputs;

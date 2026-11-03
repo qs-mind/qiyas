@@ -431,7 +431,7 @@ fn grouped_openings_report_every_completed_input_and_keep_one_undo_step() {
 }
 
 #[test]
-fn rejected_nested_batches_never_restart_or_complete_the_outer_counter() {
+fn nested_batches_count_as_one_outer_step() {
     let (_dir, mut session) = session();
     let steps = Arc::new(Mutex::new(Vec::new()));
     let observed = steps.clone();
@@ -447,10 +447,7 @@ fn rejected_nested_batches_never_restart_or_complete_the_outer_counter() {
             )
         },
     );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("inside another batch"));
+    result.unwrap();
     assert_eq!(
         steps
             .lock()
@@ -458,8 +455,10 @@ fn rejected_nested_batches_never_restart_or_complete_the_outer_counter() {
             .iter()
             .map(|s| (s.done, s.total))
             .collect::<Vec<_>>(),
-        [(1, 2)]
+        [(1, 2), (2, 2)]
     );
+    assert_eq!(session.history_steps().0.len(), 1);
+    assert!(session.undo());
     assert!(!session.can_undo());
 }
 

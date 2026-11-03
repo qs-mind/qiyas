@@ -457,6 +457,13 @@ fn validate_at(
                 w
             }),
     );
+    if info.name == "set_layer" {
+        for field in ["prop", "value"] {
+            if canonical.get(field).is_none() {
+                report.error("missing_field", &pointer(path, field), format!("Missing required field {field}; give both prop and value, properties, or just name to select a layer"));
+            }
+        }
+    }
     if info.name == "table" {
         for field in ["rows", "cols"] {
             if canonical.get(field).is_none() {
@@ -1033,6 +1040,18 @@ fn schema_error(
                         .min_by_key(|choice| edit_distance(name, choice))
                 })
             });
+            if value.is_string() && options.as_ref() == &json!(crate::check::RULES) {
+                out.warnings.push(InputIssue {
+                    replaced: None,
+                    code: "unknown_rule".into(),
+                    pointer: path,
+                    message: format!(
+                        "Skipped unknown check rule {value}. Valid names: {options}; nearest valid choice: {}",
+                        nearest.unwrap_or_default()
+                    ),
+                });
+                return;
+            }
             format!(
                 "Choose one of {options}{}",
                 nearest

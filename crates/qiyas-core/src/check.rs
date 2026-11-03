@@ -92,7 +92,7 @@ pub struct CheckScope {
     /// requests run regardless of that inference; an explicit pack remains binding.
     #[schemars(extend("items" = serde_json::json!({"type":"string","enum":["general","construction","placement"]})))]
     pub packs: Vec<String>,
-    /// Only these rules; every rule when empty: literal_newline, duplicate, overlap,
+    /// Unknown rules are skipped with input warnings. Only these rules; every rule when empty: literal_newline, duplicate, overlap,
     /// dangling_end, overshoot, tiny_segment, room_open, room_size_text_differs,
     /// dim_override_mismatch, text_overlaps_text, text_over_lines, text_height_vs_scale,
     /// far_off_extents, unlinked_takeoff, layer_zero, colour_not_bylayer, missing_center_mark,
@@ -1557,16 +1557,6 @@ pub fn layout_rule(rule: &str) -> bool {
 }
 impl CheckScope {
     pub fn validate(&self) -> Result<(), crate::CoreError> {
-        if let Some(rule) = self.rules.iter().find(|r| !RULES.contains(&r.as_str())) {
-            return Err(crate::CoreError::InvalidCommand(format!(
-                "check_drawing rules: unknown rule {rule}. Choose: {}. Nearest valid choice: {}",
-                RULES.join(", "),
-                RULES
-                    .iter()
-                    .min_by_key(|choice| crate::validation::edit_distance(rule, choice))
-                    .unwrap()
-            )));
-        }
         if let Some(pack) = self
             .packs
             .iter()

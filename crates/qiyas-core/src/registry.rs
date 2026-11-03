@@ -441,12 +441,6 @@ impl Registry {
                     props.insert(key.into(), schema);
                 }
                 c.schema["required"] = json!(["type", "name"]);
-                c.schema["anyOf"] = json!([
-                    {"required":["prop","value"]}, {"required":["color"]},
-                    {"required":["linetype"]}, {"required":["lineweight"]},
-                    {"required":["on"]}, {"required":["frozen"]},
-                    {"required":["locked"]}, {"required":["plot"]}
-                ]);
             }
             if c.name == "delete_entities" {
                 c.schema["properties"]["handles"] = c.schema["properties"]["targets"].clone();

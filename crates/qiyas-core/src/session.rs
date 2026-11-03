@@ -1944,11 +1944,6 @@ impl Session {
             color,
         } = cmd
         {
-            if self.tx_depth > 0 {
-                return Err(CoreError::InvalidCommand(
-                    "A batch can't run inside another batch".to_string(),
-                ));
-            }
             return self.run_batch(commands, layer, color, source);
         }
         if let Command::LabelSpaces {

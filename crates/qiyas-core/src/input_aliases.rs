@@ -56,6 +56,63 @@ pub(crate) fn normalize(value: &mut Value) {
         alias(value, "action", "kind");
     }
     match name.as_str() {
+        "set_layer"
+            if value.get("prop").is_none()
+                && value.get("value").is_none()
+                && ![
+                    "color",
+                    "linetype",
+                    "lineweight",
+                    "on",
+                    "frozen",
+                    "locked",
+                    "plot",
+                ]
+                .iter()
+                .any(|key| value.get(*key).is_some()) =>
+        {
+            if let Some(layer) = value.as_object_mut().and_then(|map| map.remove("name")) {
+                value["type"] = json!("set_current");
+                value["current"] = json!({"layer":layer, "color":"ByLayer"});
+            }
+        }
+        "opening_schedule" => alias(value, "height", "text_height"),
+        "decision" | "decision.set" if value["kind"] == "set" || name == "decision.set" => {
+            let description = value
+                .as_object_mut()
+                .and_then(|map| map.remove("description"));
+            fn reason(entry: &mut Value, description: Option<&Value>) {
+                let own_description = entry
+                    .as_object_mut()
+                    .and_then(|map| map.remove("description"));
+                if entry.get("reason").is_none()
+                    && entry["source"] == "mizan_design"
+                    && entry["set_by"]
+                        .as_str()
+                        .is_some_and(|s| s.eq_ignore_ascii_case("mizan"))
+                    && matches!(entry["status"].as_str(), Some("answered" | "provisional"))
+                    && crate::decisions::has_value(&entry["value"])
+                {
+                    if let Some(text) = own_description
+                        .as_ref()
+                        .or(description)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        entry["reason"] = json!(text);
+                    }
+                }
+            }
+            if let Some(entries) = value.get_mut("entries") {
+                if let Some(entries) = entries.as_array_mut() {
+                    for entry in entries {
+                        reason(entry, description.as_ref());
+                    }
+                } else {
+                    reason(entries, description.as_ref());
+                }
+            }
+        }
         "records" => {
             if let Some(query) = value.get_mut("query") {
                 records(query);
@@ -183,6 +240,13 @@ pub(crate) fn normalize(value: &mut Value) {
 /// Only inferred values, not renamed fields, are defaults.
 pub(crate) fn defaults(raw: &Value, canonical: &Value, prefix: &str) -> Vec<DefaultUsed> {
     fn visit(a: &Value, b: &Value, path: &str, out: &mut Vec<DefaultUsed>) {
+        if a["type"] == "set_layer" && b["type"] == "set_current" {
+            out.push(DefaultUsed {
+                field: format!("{path}/current/color"),
+                value: json!("ByLayer"),
+                unit: None,
+            });
+        }
         if let Some(map) = b.as_object() {
             for (key, value) in map {
                 let next = format!("{path}/{key}");
@@ -201,6 +265,7 @@ pub(crate) fn defaults(raw: &Value, canonical: &Value, prefix: &str) -> Vec<Defa
                             | "rows"
                             | "cols"
                             | "op"
+                            | "reason"
                     )
                     || (key == "rows" && a[key].is_array() && value.is_number())
                 {
@@ -231,7 +296,23 @@ pub(crate) fn schema(name: &str, schema: &mut Value) {
         }
     }
     match name {
+        "opening_schedule" => {
+            schema["properties"]["height"] = schema["properties"]["text_height"].clone();
+        }
         "decision.set" | "decision.list" => {
+            if name == "decision.set" {
+                schema["properties"]["description"] = json!({"type":"string", "description":"Used as an omitted reason only for a nonempty Mizan design value (source mizan_design, set_by mizan)."});
+                if let Some(variants) = schema["properties"]["entries"]["anyOf"].as_array_mut() {
+                    for variant in variants {
+                        let entry = if variant["type"] == "array" {
+                            &mut variant["items"]
+                        } else {
+                            variant
+                        };
+                        entry["properties"]["description"] = json!({"type":"string"});
+                    }
+                }
+            }
             optional(schema, &["kind"]);
             schema["properties"]["action"] = schema["properties"]["kind"].clone();
             schema["description"] = json!(format!(

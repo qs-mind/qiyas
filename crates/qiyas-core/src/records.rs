@@ -104,7 +104,7 @@ pub enum Detail {
 /// `value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Where {
-    /// A summary name (layer, length, area), or a JSON pointer into data (/common/layer).
+    /// A summary name (layer, length, area), or a data path (data/common/layer or /common/layer).
     pub path: String,
     #[serde(default)]
     pub op: WhereOp,
@@ -156,7 +156,7 @@ pub struct RecordQuery {
     /// Every condition must hold.
     #[serde(rename = "where")]
     pub conditions: Vec<Where>,
-    /// Summary names (key, type, layer, length, area, text) or JSON pointers into data.
+    /// Summary names (key, type, layer, length, area, text) or data/... and /... paths into data.
     /// Lengths, areas and bounds use drawing units except explicitly suffixed _m fields.
     /// Missing properties are reported in warnings.
     pub fields: Vec<String>,
@@ -878,6 +878,11 @@ fn field_value<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
     if path == "handle" {
         return record.get("key");
     }
+    if let Some(path) = path.strip_prefix("data/") {
+        return record
+            .get("data")
+            .and_then(|d| d.pointer(&format!("/{path}")));
+    }
     if path.starts_with('/') {
         record
             .get("data")
@@ -911,10 +916,12 @@ fn validate_paths(
             .skip(1)
             .all(|part| part.starts_with('0') || part.starts_with('1'));
         if path.is_empty()
-            || (!path.starts_with('/') && (path.contains('/') || path.contains('~') || path == "*"))
+            || (!path.starts_with('/')
+                && !path.starts_with("data/")
+                && (path.contains('/') || path.contains('~') || path == "*"))
             || !valid_escape
         {
-            return Err(invalid(format!("Invalid record path {path:?}. Use a summary name such as layer or a JSON pointer such as /common/layer")));
+            return Err(invalid(format!("Invalid record path {path:?}. Use a summary name such as layer or a data path such as data/common/layer or /common/layer")));
         }
         let existence = q
             .conditions
@@ -929,13 +936,13 @@ fn validate_paths(
             // A projected field that does not exist is omitted; a filter on one is an error.
             if q.conditions.iter().any(|w| &w.path == path) {
                 return Err(invalid(format!(
-                    "No record has {path:?}. Available summary names and data paths: {names}"
+                    "No record has {path:?}. Use a summary name, data/... or /... into record data. Available names and paths: {names}"
                 )));
             }
             if !absent.contains(path) {
                 absent.push(path.clone());
                 warnings.push(format!(
-                    "No record has {path:?}; the field was omitted. Available summary names and data paths: {names}"
+                    "No record has {path:?}; the field was omitted. Use a summary name, data/... or /... into record data. Available names and paths: {names}"
                 ));
             }
         }

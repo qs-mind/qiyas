@@ -300,6 +300,9 @@ pub enum Command {
         /// (doors, windows), never one sum across them.
         #[serde(default)]
         language: Option<crate::rooms::LabelLanguage>,
+        /// Text height in drawing units; accepts height as an alias. Omit for annotation scale.
+        #[serde(default, alias = "height")]
+        text_height: Option<f64>,
     },
 
     /// Length along `points`, in drawing coordinates. Needs 2 points or more.
@@ -601,15 +604,15 @@ pub enum Command {
     Draw(DrawSpec),
     /// Commands run in order as ONE undo step, all or nothing: when one fails, everything the
     /// batch did is put back and the error names the command (from 0). Any command but those
-    /// that can't run in a batch (editing a block in place, writing a block, the clipboard,
-    /// another batch). With `layer` the commands draw on that layer (made when missing) and with
+    /// that can't run in a batch (editing a block in place, writing a block, the clipboard).
+    /// With `layer` the commands draw on that layer (made when missing) and with
     /// `color` in that colour ("ByLayer", "ACI n", "#rrggbb"); the current state is put back
     /// after, and undo puts back a current state the commands changed. `Outcome::Batch`: each
     /// command's outcome and every entity added. A batch consisting only of independent
     /// opening additions validates each input in order and rebuilds each wall once; those
     /// outcomes share the final wall state. Mixed commands and step references stay sequential.
-    /// Generate steps expand in place, sharing limits and the transaction; nested batches are refused.
-    #[schemars(extend("x-category" = "draw", "x-batch" = false))]
+    /// Generate and nested batch steps share limits and the transaction.
+    #[schemars(extend("x-category" = "draw"))]
     #[schemars(example = json!({"type": "batch", "commands": [{"type": "new_layer", "name": "A-WALL"}, {"type": "set_current", "current": {"layer": "A-WALL"}}, {"type": "draw", "kind": "rectangle", "a": [0, 0], "b": [5, 4]}]}))]
     #[schemars(example = json!({"type": "batch", "layer": "A-DOOR", "commands": [{"type": "draw", "kind": "arc", "centre": [0, 0], "radius": 0.9, "start": 0, "end": 90}, {"type": "draw", "kind": "line", "a": [0, 0], "b": [0.9, 0]}]}))]
     Batch {
@@ -1086,6 +1089,7 @@ pub enum Command {
     /// {type: "set_layer", name: "A-WALL", color: "red", lineweight: 50, locked: true}.
     /// Color accepts ACI 1 to 255, an integer index, #rrggbb, or red/yellow/green/cyan/blue/magenta/white.
     /// Setting its linetype to CENTER or HIDDEN adds that standard pattern when missing.
+    /// With only name, selects that layer for drawing and defaults entity color to ByLayer.
     #[schemars(extend("x-category" = "layers"))]
     #[schemars(example = json!({"type": "set_layer", "name": "A-WALL", "prop": "color", "value": "ACI 1"}))]
     #[schemars(example = json!({"type": "set_layer", "name": "A-WALL", "prop": "lineweight", "value": 50}))]
@@ -2408,11 +2412,13 @@ impl Session {
                 at,
                 source_sheet,
                 language,
+                text_height,
             } => {
                 let h = self.add_opening_schedule(
                     at.unwrap_or([0.0, 0.0]),
                     source_sheet.as_deref(),
                     language,
+                    text_height,
                 )?;
                 self.place_new_table(h, at.is_none())?;
                 return Ok(Outcome::Added { handles: vec![h] });

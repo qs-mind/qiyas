@@ -234,8 +234,10 @@ fn commands_that_cannot_batch_are_refused_and_nothing_runs() {
         "{err}"
     );
     assert_eq!(model_count(&s), entities);
-    let nested = s.run(batch(vec![batch(vec![line([0.0, 0.0], [1.0, 0.0])])]));
-    assert!(nested.unwrap_err().to_string().contains("another batch"));
+    s.run(batch(vec![batch(vec![line([0.0, 0.0], [1.0, 0.0])])]))
+        .unwrap();
+    assert_eq!(model_count(&s), entities + 1);
+    assert!(s.undo());
     assert_eq!(model_count(&s), entities);
 }
 

@@ -20,7 +20,7 @@ use crate::{CoreError, Session, Target};
 /// Most cells a new table may have.
 const MAX_CELLS: usize = 10_000;
 /// A new table's text is this share of its row height.
-const TEXT_IN_ROW: f64 = 0.5;
+pub(crate) const TEXT_IN_ROW: f64 = 0.5;
 
 /// A table's cells for the table editor (`EntityInfo::table`).
 #[derive(Debug, Clone, PartialEq, Serialize)]

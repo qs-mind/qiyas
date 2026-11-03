@@ -55,7 +55,7 @@ pub enum TakeoffExclusion {
 #[serde(deny_unknown_fields)]
 pub struct Decision {
     pub name: String,
-    /// Null only for an unanswered question; otherwise a number, string or boolean.
+    /// Null only for an unanswered question; otherwise a scalar or nonempty JSON array/object.
     pub value: Value,
     /// Physical unit, or empty for a nonnumeric value or dimensionless number.
     pub unit: String,
@@ -105,6 +105,16 @@ fn default_limit() -> usize {
 fn invalid(en: &str, ar: &str) -> CoreError {
     CoreError::InvalidCommand(format!("{en} / {ar}"))
 }
+pub(crate) fn has_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => items.iter().any(has_value),
+        Value::Object(fields) => fields.values().any(has_value),
+        _ => true,
+    }
+}
+
 impl Decision {
     pub(crate) fn validate(&self) -> Result<(), CoreError> {
         if self
@@ -130,16 +140,14 @@ impl Decision {
             return Err(invalid("Invalid decision name", "اسم القرار غير صالح"));
         }
         if self.reason.trim().is_empty()
-            || self.value.is_array()
-            || self.value.is_object()
-            || (self.status != Status::Asked && self.value.is_null())
+            || (!has_value(&self.value) && self.status != Status::Asked)
             || (self.status == Status::Asked
                 && (!self.value.is_null()
                     || self.question.as_deref().is_none_or(|s| s.trim().is_empty())))
         {
             return Err(invalid(
-                "Give a reason and a scalar value, or an unanswered question with null value",
-                "أدخل سببا وقيمة مفردة أو سؤالا بلا إجابة وقيمته فارغة",
+                "Give a reason and a nonempty value, or an unanswered question with null value",
+                "أدخل سببا وقيمة غير فارغة أو سؤالا بلا إجابة وقيمته فارغة",
             ));
         }
         Ok(())

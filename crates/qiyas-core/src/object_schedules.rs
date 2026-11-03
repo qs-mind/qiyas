@@ -396,10 +396,18 @@ impl Session {
         crate::xdata::write_json(entity.common_mut(), SCHEDULE_APP, app, spec)
     }
 
-    pub(crate) fn add_object_schedule(
+    pub(crate) fn add_object_schedule(&mut self, spec: ObjectSchedule) -> Result<u64, CoreError> {
+        self.add_object_schedule_sized(spec, None)
+    }
+
+    pub(crate) fn add_object_schedule_sized(
         &mut self,
         mut spec: ObjectSchedule,
+        text_height: Option<f64>,
     ) -> Result<u64, CoreError> {
+        if text_height.is_some_and(|h| !h.is_finite() || h <= 0.0) {
+            return Err(invalid("Schedule text_height must be positive"));
+        }
         if let Some(ids) = &mut spec.ids {
             ids.sort_unstable();
             ids.dedup();
@@ -415,7 +423,8 @@ impl Session {
                     .collect()
             })
             .collect();
-        let (width, height) = self.table_sizes(0.0, 0.0, &shown);
+        let row_height = text_height.map_or(0.0, |h| h / crate::table::TEXT_IN_ROW);
+        let (width, height) = self.table_sizes(0.0, row_height, &shown);
         let saved = self.current.clone();
         let result = (|| {
             if self.current.layer == "0" {

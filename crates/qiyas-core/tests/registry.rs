@@ -383,7 +383,7 @@ fn effects_and_undo_parts_follow_the_command() {
     assert_eq!(get("edit_block_in_place").effect, Effect::Session);
     assert_eq!(get("id_point").effect, Effect::Read);
     assert!(get("delete_entities").destructive);
-    assert!(!get("batch").batchable);
+    assert!(get("batch").batchable);
     assert!(get("set_conflicts").internal);
     let dry: Command = serde_json::from_str(r#"{"type":"purge","dry_run":true}"#).unwrap();
     assert_eq!(effect_of(&dry), Effect::Read);

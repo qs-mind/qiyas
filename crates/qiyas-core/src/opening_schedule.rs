@@ -138,6 +138,7 @@ impl Session {
         at: [f64; 2],
         sheet: Option<&str>,
         language: Option<crate::rooms::LabelLanguage>,
+        text_height: Option<f64>,
     ) -> Result<u64, CoreError> {
         let name = sheet.unwrap_or(if self.sheet.eq_ignore_ascii_case("*Model_Space") {
             &self.sheet
@@ -164,7 +165,7 @@ impl Session {
             ..spec.filter
         };
         self.mark_openings(source)?;
-        let handle = self.add_object_schedule(spec)?;
+        let handle = self.add_object_schedule_sized(spec, text_height)?;
         let app = self.object_app(SCHEDULE_APP)?;
         crate::xdata::write_text(
             self.drawing

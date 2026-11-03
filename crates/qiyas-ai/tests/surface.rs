@@ -3429,26 +3429,23 @@ fn failed_text_filter_measure_list_and_decision_action_are_accepted() {
 }
 
 #[test]
-fn unknown_drawing_rule_lists_choices_and_the_nearest_rule() {
+fn unknown_drawing_rule_runs_known_rules_and_warns() {
     let mut s = Session::new_blank(std::path::Path::new("tower-check.dxf"), 6);
     for rule in ["outside_boundary", "duplicat"] {
-        let error = call(
-            &mut s,
-            READ,
-            json!({"op":"check","args":{"rules":["part_overlap","duplicate",rule]}}),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            error.contains("check") && error.contains("/args/rules/2"),
-            "{error}"
-        );
-        assert!(
-            error.contains("nearest valid choice")
-                && error.contains("job_limit")
-                && error.contains("duplicate"),
-            "{error}"
-        );
+        for input in [
+            json!({"op":"check","args":{"rules":["duplicate","overlap",rule]}}),
+            json!({"op":"run","args":{"command":{"type":"check_drawing","scope":{"rules":["duplicate","overlap",rule]}}}}),
+        ] {
+            let result = call(&mut s, READ, input).unwrap();
+            let warnings = result["warnings"].to_string();
+            assert!(
+                warnings.contains("nearest valid choice")
+                    && warnings.contains("job_limit")
+                    && warnings.contains(rule),
+                "{result}"
+            );
+            assert!(result.to_string().contains("checked_rules"), "{result}");
+        }
     }
 }
 
@@ -3552,4 +3549,45 @@ fn live_sheet_name_failures_resolve_or_offer_current_sheets() {
     )
     .unwrap();
     assert!(page["total"].as_u64().unwrap() > 0, "{page}");
+}
+
+#[test]
+fn layer_selection_and_structured_design_defaults_survive_the_tool_boundary() {
+    let mut s = Session::new_blank(std::path::Path::new("office-towers.dxf"), 6);
+    let result = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"batch","args":{"commands":[
+            {"type":"set_layer","name":"A-POWER"},
+            {"type":"draw","kind":"line","a":[0,0],"b":[0,30]},
+            {"type":"decision","kind":"set","description":"Design decision: measured floor areas",
+             "entries":[{"name":"net_room_areas","value":{"meeting":20.900625,"studio":69.875},
+                "unit":"m2","source":"mizan_design","set_by":"mizan","status":"answered",
+                "citation":"Measured finished wall boundaries"}]}
+        ]}}),
+    )
+    .unwrap();
+    let defaults = result["defaults_used"].as_array().unwrap();
+    assert!(
+        defaults
+            .iter()
+            .any(|d| d["field"] == "/commands/0/current/color" && d["value"] == "ByLayer"),
+        "{result}"
+    );
+    assert!(
+        defaults
+            .iter()
+            .any(|d| d["field"] == "/commands/2/entries/0/reason"),
+        "{result}"
+    );
+    assert_eq!(s.current.layer, "A-POWER");
+    assert!(s
+        .drawing
+        .entities_in("*Model_Space")
+        .all(|e| e.common().layer == "A-POWER"));
+    assert_eq!(s.decisions().unwrap()[0].value["meeting"], 20.900625);
+    assert_eq!(s.history_steps().0.len(), 1);
+    assert!(s.undo());
+    assert!(s.decisions().unwrap().is_empty());
+    assert!(!s.drawing.doc.layers.contains("A-POWER"));
 }

@@ -289,13 +289,7 @@ impl Session {
         let warnings = report.warnings.clone();
         let result = match command {
             Command::Batch { layer, color, .. } => {
-                if self.tx_depth > 0 {
-                    Err(CoreError::InvalidCommand(
-                        "A batch can't run inside another batch".into(),
-                    ))
-                } else {
-                    self.run_input_batch(&raw["commands"], layer, color, source, report)
-                }
+                self.run_input_batch(&raw["commands"], layer, color, source, report)
             }
             command => self.run_command(command, source).map(|outcome| Reported {
                 revision: self.revision(),

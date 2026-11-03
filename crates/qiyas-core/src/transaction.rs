@@ -102,7 +102,7 @@ impl Session {
     /// `run_as` record their steps into a group that closes into one. When `f` fails, everything
     /// it did is put back (the drawing, take-off, BOQ, conflicts and view state) and its error
     /// returned. Transactions nest. Commands that can't run in a batch (`x-batch` false in the
-    /// registry: editing a block in place, writing a block, the clipboard, a batch) are refused
+    /// registry: editing a block in place, writing a block, the clipboard) are refused
     /// inside one.
     pub fn transaction<T>(
         &mut self,
@@ -211,6 +211,8 @@ impl Session {
         f: impl FnOnce(&mut Session) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
         self.transaction(source, label, |s| {
+            let restore =
+                layer.is_some() || color.is_some() || (s.tx_depth > 1 && label == "batch");
             let before = s.current.clone();
             let mut now = before.clone();
             if let Some(name) = layer.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
@@ -230,8 +232,7 @@ impl Session {
             if let Some(color) = color.filter(|c| !c.trim().is_empty()) {
                 now.color = color;
             }
-            let restore = now != before;
-            if restore {
+            if now != before {
                 s.run_as(Command::SetCurrent { current: now }, source)?;
             }
             let value = f(s)?;

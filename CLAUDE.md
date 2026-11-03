@@ -302,12 +302,19 @@ Wall openings accept `mark` at creation. Layer assignments create missing layers
 same undo step and return `layer_created` advice. Tables accept row data, `columns` headers,
 `col_widths` and `text_height`; rows and columns are inferred. A sole `dim_edit` operation
 field infers `op`; `line_point` moves a linear/aligned dimension line. Viewport frame/centre
-record edits name the `mview` target form. Unknown check rules suggest the nearest valid name.
+record edits name the `mview` target form. Unknown drawing check rules are skipped with warnings listing valid names and the nearest;
+known requested rules still run. An unknown-only list runs no rules.
 Method input defaults scope to the drawing (`project`, also accepts `drawing`), title to name,
 based_on to `none`, source_note to empty, and term labels to their factor expressions;
 rule and term citations remain required. Inferred values appear in `defaults_used`, including
 nested batches. Quantities remain per-element expressions; totals sum evaluated values
 without parsing an ever-growing expression. No new standard or measurement facts are supplied.
+Name-only `set_layer` selects that layer (creating it if missing), with entity colour ByLayer
+reported in `defaults_used`; property-bearing forms still edit layer properties. Opening
+schedules accept `text_height` in drawing units, with `height` as its alias. Decisions retain
+nonempty arrays and objects as JSON. An omitted reason uses the entry or command description
+only for a nonempty answered/provisional value with source `mizan_design` and setter `mizan`,
+and reports that default; other sources still need a reason. Empty decisions remain refused.
 
 ## Session references
 
@@ -331,7 +338,8 @@ without parsing an ever-growing expression. No new standard or measurement facts
   styles, blocks, layouts, viewports, groups, views, header, layer states, xrefs, take-off, BOQ,
   conflicts, schedules, comments, constraints, parameters; filters handles, names, type, layer,
   sheet, bounds and `where` (eq, ne, in, not_in, lt, le, gt, ge, contains, exists on a summary
-  name or a JSON pointer into `data`); `fields` projects; `detail` summary or full. Pages of 20 (200 at most) with a 12 KB budget for records and warnings, excluding the page envelope
+  name or a JSON pointer into `data`, accepting `data/insert_point` and `/insert_point`);
+  `fields` uses the same paths and projects; `detail` summary or full. Pages of 20 (200 at most) with a 12 KB budget for records and warnings, excluding the page envelope
   (`MAX_BYTES`, `truncated`; one oversized record can exceed the budget); arrays past 100 items say how many they left out.
 - Component reuse stays in the drawing. `records` with `collection:"blocks"` and
   `where:[{path:"layout",value:false}]` lists definitions with `base_point` in block coordinates,
@@ -1103,7 +1111,9 @@ without parsing an ever-growing expression. No new standard or measurement facts
 - `Command::Batch { commands, layer?, color? }` runs any commands in order as ONE undo step, all
   or nothing (a transaction, see Undo): each through `run_as` with its usual follow-ups. Refused:
   what the registry marks `x-batch` false (editing a block in place, writing a block, the
-  clipboard copy, another batch). With `layer` they draw on that layer (made when missing), with
+  clipboard copy). Nested batches join the same atomic undo group, retain step paths and
+  share recipe limits; each restores its layer/colour context before later steps.
+  With `layer` they draw on that layer (made when missing), with
   `color` in that colour, and the current state is put back after; undo puts back a current
   state the commands changed. A failure is `CoreError::Step { index, label, error }` ("Batch step
   2 (draw.line): …", from 0). `Outcome::Batch { outcomes, added }`. The AI's drawing tools use

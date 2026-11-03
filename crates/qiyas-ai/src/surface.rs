@@ -2116,7 +2116,9 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
         ))
     })?;
     // Resolve host paths while preserving omitted fields for the core's default report.
-    wire["type"] = value["type"].clone();
+    if !(wire["type"] == "set_layer" && value["type"] == "set_current") {
+        wire["type"] = value["type"].clone();
+    }
     if value["type"] == "deliverable" && wire.get("report").is_none() {
         if let Some(report) = value.get("report") {
             wire["report"] = report.clone();
