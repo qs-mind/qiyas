@@ -30,6 +30,8 @@ pub mod element_metadata;
 mod embed;
 mod error;
 mod field;
+pub mod finding;
+pub use finding::Finding;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
 pub mod generate;

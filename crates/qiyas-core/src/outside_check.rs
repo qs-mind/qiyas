@@ -127,27 +127,47 @@ impl Session {
     /// Independent raw recount and geometric observations, paged with totals per finding kind.
     /// This read never edits quantities, decisions, queries, comments or the visible sheet.
     pub fn outside_check(&self, query: &OutsideQuery) -> Result<Value, CoreError> {
-        let entries = self.outside_findings(query)?;
-        let mut totals = empty_counts();
-        let mut per_sheet = BTreeMap::<String, BTreeMap<String, usize>>::new();
-        for row in &entries {
-            let kind = row["kind"].as_str().unwrap_or("unknown").to_owned();
-            *totals.entry(kind.clone()).or_default() += 1;
-            *per_sheet
-                .entry(row["sheet"].as_str().unwrap_or("").into())
-                .or_insert_with(empty_counts)
-                .entry(kind)
-                .or_default() += 1;
-        }
+        let report = self.outside_findings(query)?;
         Ok(page(
-            json!({"totals":totals,"sheets":per_sheet,
-            "scope":"sheet_owned_entities","scope_ar":"عناصر الرسم التابعة لكل لوحة",
-            "curve_chord_error_drawing_units":self.outside_curve_tolerance(),
-            "units_known":self.drawing.units != crate::Units::Unknown}),
-            entries,
+            report.overview,
+            report
+                .findings
+                .into_iter()
+                .map(crate::Finding::into_record)
+                .collect(),
             query.offset,
             query.limit,
         ))
+    }
+
+    /// Complete typed observations, before the MCP adapter applies paging.
+    pub fn outside_findings(
+        &self,
+        query: &OutsideQuery,
+    ) -> Result<crate::finding::FindingReport, CoreError> {
+        let findings: Vec<_> = self
+            .outside_records(query)?
+            .into_iter()
+            .map(|row| crate::Finding::from_record("outside_check", row))
+            .collect();
+        let mut totals = empty_counts();
+        let mut per_sheet = BTreeMap::<String, BTreeMap<String, usize>>::new();
+        for finding in &findings {
+            *totals.entry(finding.rule.clone()).or_default() += 1;
+            *per_sheet
+                .entry(finding.sheet.clone().unwrap_or_default())
+                .or_insert_with(empty_counts)
+                .entry(finding.rule.clone())
+                .or_default() += 1;
+        }
+        Ok(crate::finding::FindingReport {
+            overview: json!({"totals":totals,"sheets":per_sheet,
+                "scope":"sheet_owned_entities","scope_ar":"عناصر الرسم التابعة لكل لوحة",
+                "curve_chord_error_drawing_units":self.outside_curve_tolerance(),
+                "units_known":self.drawing.units != crate::Units::Unknown}),
+            summaries: Vec::new(),
+            findings,
+        })
     }
 
     pub(crate) fn outside_summary(&self, answer: &str) -> Result<Value, CoreError> {
@@ -165,7 +185,7 @@ impl Session {
         1e-5 / self.drawing.units.to_metres()
     }
 
-    fn outside_findings(&self, query: &OutsideQuery) -> Result<Vec<Value>, CoreError> {
+    fn outside_records(&self, query: &OutsideQuery) -> Result<Vec<Value>, CoreError> {
         let doc = &self.drawing.doc;
         // Read stored generated results only. No evaluation of types, rules or mappings.
         let report: MeasurementReport =

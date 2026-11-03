@@ -1,5 +1,6 @@
+import { findingText, findingFix, type PackFindings } from "../findings";
 import { useEffect, useState } from "react";
-import { measurementPackCheck, type PackCheck } from "../api";
+import { measurementPackCheck } from "../api";
 import { useLanguage, useT } from "../i18n";
 import { isWorkspaceBusy, uiError } from "../i18n/errors";
 import { DotLoader } from "../shell/DotLoader";
@@ -15,7 +16,7 @@ export function PackCheckCard({ drawing, workspace, revision, busy = false }: {
 }) {
   const t = useT();
   const { lang } = useLanguage();
-  const [card, setCard] = useState<PackCheck | null>(null);
+  const [card, setCard] = useState<PackFindings | null>(null);
   const [error, setError] = useState<{ cause: unknown } | null>(null);
   const [reload, setReload] = useState(0);
 
@@ -47,18 +48,18 @@ export function PackCheckCard({ drawing, workspace, revision, busy = false }: {
       : card && <>
         <p className="pack-check-summary" role="status">{t(card.ready ? "ai.packCheck.ready" : "ai.packCheck.fix")}</p>
         <ul>
-          {card.lines.map((line) => {
-            const labelKey = `ai.packCheck.${line.id}`;
+          {card.findings.map((line) => {
+            const labelKey = `ai.packCheck.${line.rule}`;
             const label = t(labelKey);
-            const found = lang === "ar" ? line.found_ar : line.found_en;
-            const fix = lang === "ar" ? line.fix_ar : line.fix_en;
-            return <li key={line.id} data-passes={line.passes}>
-              <span className="pack-check-mark" aria-hidden="true">{line.passes ? "✓" : "!"}</span>
+            const found = findingText(line, lang);
+            const fix = findingFix(line, lang);
+            return <li key={line.id} data-passes={line.passed}>
+              <span className="pack-check-mark" aria-hidden="true">{line.passed ? "✓" : "!"}</span>
               <span className="pack-check-text">
-                <span className="sr-only">{t(line.passes ? "ai.packCheck.passed" : "ai.packCheck.needsFix")}{": "}</span>
+                <span className="sr-only">{t(line.passed ? "ai.packCheck.passed" : "ai.packCheck.needsFix")}{": "}</span>
                 {label !== labelKey && <strong>{label}{": "}</strong>}
                 {isolateRuns(found)}
-                {!line.passes && fix && <> <span className="pack-check-fix">{isolateRuns(fix)}</span></>}
+                {!line.passed && fix && <> <span className="pack-check-fix">{isolateRuns(fix)}</span></>}
               </span>
             </li>;
           })}

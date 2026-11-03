@@ -542,12 +542,13 @@ impl Session {
     ) {
         let mismatch = |handles: Vec<u64>, message: String, push: &mut dyn FnMut(Finding)| {
             push(Finding {
-                rule: "room_area_mismatch",
-                pack: "construction",
+                rule: "room_area_mismatch".into(),
+                pack: "construction".into(),
                 severity: Severity::Warning,
                 handles,
                 at: None,
                 message,
+                ..crate::Finding::drawing()
             });
         };
         for entity in self.drawing.doc.entities_in_block(sheet) {

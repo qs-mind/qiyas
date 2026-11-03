@@ -71,6 +71,20 @@ fn raw_blocks_recount_twenty_eight_doors_even_when_boq_loses_the_items() {
         ],
     );
     let correct = rows(&s, Default::default());
+    let shared = s.outside_findings(&OutsideQuery::default()).unwrap();
+    assert_eq!(
+        shared
+            .findings
+            .iter()
+            .cloned()
+            .map(qiyas_core::Finding::into_record)
+            .collect::<Vec<_>>(),
+        correct
+    );
+    assert!(shared
+        .findings
+        .iter()
+        .all(|f| f.source == "outside_check" && !f.id.is_empty()));
     let raw = correct
         .iter()
         .find(|v| v["kind"] == "raw_recount" && v["group"]["kind"] == "blocks")

@@ -1,3 +1,4 @@
+import { conflictFinding, findingText, findingQuantity, type DiscrepancyFinding } from "../findings";
 import { readingDirection } from "../ai/content";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Command, Conflict, ConflictKind } from "../api";
@@ -11,13 +12,12 @@ import {
   countByKind,
   filterConflicts,
   groupByKind,
-  reasonIn,
   type StatusFilter,
 } from "./conflictsMath";
 
 export type ResolveCommand = Extract<Command, { type: "resolve_conflict" }>;
 
-const conflictKey = (c: Conflict) => c.id;
+const conflictKey = (c: DiscrepancyFinding) => c.id;
 
 type Props = {
   conflicts: Conflict[];
@@ -51,10 +51,10 @@ export const ConflictsPanel = memo(function ConflictsPanel({
   /** Set by Escape, so the blur that ends the edit doesn't save it. */
   const cancelled = useRef(false);
 
-  function endEdit(c: Conflict) {
+  function endEdit(c: DiscrepancyFinding) {
     const note = draft.trim();
-    if (!cancelled.current && note !== c.note) {
-      onResolve({ type: "resolve_conflict", id: c.id, status: c.status, note });
+    if (!cancelled.current && note !== c.details.note) {
+      onResolve({ type: "resolve_conflict", id: c.id, status: c.details.status, note });
     }
     cancelled.current = false;
     setEditing(null);
@@ -86,12 +86,12 @@ export const ConflictsPanel = memo(function ConflictsPanel({
   }
 
   /** What a row can show on the drawing: a measurement, a BOQ item or a sheet. */
-  const showable = (c: Conflict) => c.measurements.length > 0 || !!c.boq_code || c.sheets.length > 0;
+  const showable = (c: DiscrepancyFinding) => c.details.measurements.length > 0 || !!c.details.boq_code || c.details.sheets.length > 0;
   /** The rows in the order of the kinds, so the grid's sections come in that order. */
-  const rows = useMemo(() => groupByKind(shown).flatMap((g) => g.conflicts), [shown]);
-  const kindName = (c: Conflict) => t(`conflictKind.${c.kind}`);
+  const rows = useMemo(() => groupByKind(shown).flatMap((g) => g.conflicts.map(conflictFinding)), [shown]);
+  const kindName = (c: DiscrepancyFinding) => t(`conflictKind.${c.details.kind}`);
 
-  const columns = useMemo<GridColumn<Conflict>[]>(
+  const columns = useMemo<GridColumn<DiscrepancyFinding>[]>(
     () => [
       {
         id: "query",
@@ -99,16 +99,16 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         size: 200,
         grow: true,
         wrap: true,
-        cell: (c) => c.query ? <span {...readingDirection(lang === "ar" ? c.query.question_ar : c.query.question_en)}>{lang === "ar" ? c.query.question_ar : c.query.question_en}</span> : "—",
-        title: (c) => c.query?.citations.map((r) => `${r.source}: ${r.clause}`).join("; "),
+        cell: (c) => c.details.query ? <span {...readingDirection(lang === "ar" ? c.details.query.question_ar : c.details.query.question_en)}>{lang === "ar" ? c.details.query.question_ar : c.details.query.question_en}</span> : "—",
+        title: (c) => c.citations.map((r) => `${r.source}: ${r.clause}`).join("; "),
       },
       {
         id: "severity", header: t("conflicts.severity"), size: 80,
-        cell: (c) => c.query ? t(`querySeverity.${c.query.severity}`) : "—",
+        cell: (c) => c.details.query ? t(`querySeverity.${c.severity === "info" ? "information" : c.severity}`) : "—",
       },
       {
         id: "grid", header: t("conflicts.grid"), size: 100,
-        cell: (c) => c.query?.references.map((r) => `${r.sheet} / ${r.grid ?? t("conflicts.unassigned")}`).join(", ") ?? "—",
+        cell: (c) => c.details.query?.references.map((r) => `${r.sheet} / ${r.grid ?? t("conflicts.unassigned")}`).join(", ") ?? "—",
       },
       {
         id: "reason",
@@ -117,35 +117,38 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         minSize: 80,
         grow: true,
         wrap: true,
-        sortValue: (c) => reasonIn(c, lang),
-        cell: (c) => <span {...readingDirection(reasonIn(c, lang))}>{reasonIn(c, lang)}</span>,
-        title: (c) => reasonIn(c, lang),
+        sortValue: (c) => findingText(c, lang),
+        cell: (c) => <span {...readingDirection(findingText(c, lang))}>{findingText(c, lang)}</span>,
+        title: (c) => findingText(c, lang),
         cellClass: () => "reason",
       },
       {
         id: "code",
         header: t("boq.code"),
         size: 52,
-        sortValue: (c) => c.boq_code,
-        cell: (c) => c.boq_code || "—",
-        title: (c) => c.boq_code || undefined,
-        cellClass: (c) => (c.boq_code ? "code" : "muted"),
+        sortValue: (c) => c.details.boq_code,
+        cell: (c) => c.details.boq_code || "—",
+        title: (c) => c.details.boq_code || undefined,
+        cellClass: (c) => (c.details.boq_code ? "code" : "muted"),
       },
       {
         id: "numbers",
         header: t("conflicts.expectedFound"),
         size: 156,
         align: "end",
-        sortValue: (c) => c.expected,
-        cell: (c) =>
-          c.expected !== null || c.found !== null ? (
-            <>
-              <bdi>{c.expected === null ? "—" : qty(c.expected, c.unit)}</bdi> {arrow}{" "}
-              <bdi>{c.found === null ? "—" : qty(c.found, c.unit)}</bdi>
-              {c.unit && <> {unitLabel(t, c.unit)}</>}
-            </>
-          ) : null,
-        title: (c) => (c.expected !== null || c.found !== null ? t("conflicts.expectedFound") : undefined),
+        sortValue: (c) => (findingQuantity(c, "expected")?.value ?? null),
+        cell: (c) => {
+          const expected = findingQuantity(c, "expected");
+          const found = findingQuantity(c, "found");
+          if (!expected && !found) return null;
+          const unit = expected?.unit ?? found?.unit ?? "";
+          return <>
+            <bdi>{expected ? qty(expected.value, expected.unit) : "—"}</bdi> {arrow}{" "}
+            <bdi>{found ? qty(found.value, found.unit) : "—"}</bdi>
+            {unit && <> {unitLabel(t, unit)}</>}
+          </>;
+        },
+        title: (c) => c.quantities.length ? t("conflicts.expectedFound") : undefined,
         cellClass: () => "numbers",
       },
       {
@@ -153,27 +156,27 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         header: t("conflicts.sheets"),
         size: 64,
         minSize: 48,
-        sortValue: (c) => c.sheets.join(", "),
-        cell: (c) => <span {...readingDirection(c.sheets.join(", "))}>{c.sheets.join(", ")}</span>,
-        title: (c) => (c.sheets.length > 0 ? c.sheets.join(", ") : undefined),
+        sortValue: (c) => c.details.sheets.join(", "),
+        cell: (c) => <span {...readingDirection(c.details.sheets.join(", "))}>{c.details.sheets.join(", ")}</span>,
+        title: (c) => (c.details.sheets.length > 0 ? c.details.sheets.join(", ") : undefined),
         cellClass: () => "muted",
       },
       {
         id: "status",
         header: t("conflicts.status"),
         size: 96,
-        sortValue: (c) => STATUSES.indexOf(c.status),
+        sortValue: (c) => STATUSES.indexOf(c.details.status),
         isolate: true,
         cell: (c) => (
           <select
             aria-label={t("conflicts.status")}
-            value={c.status}
+            value={c.details.status}
             onChange={(e) =>
               onResolve({
                 type: "resolve_conflict",
                 id: c.id,
                 status: e.target.value as Conflict["status"],
-                note: c.note,
+                note: c.details.note,
               })
             }
           >
@@ -191,9 +194,9 @@ export const ConflictsPanel = memo(function ConflictsPanel({
         size: 96,
         minSize: 60,
         grow: true,
-        sortValue: (c) => c.note,
+        sortValue: (c) => c.details.note,
         isolate: true,
-        title: (c) => c.note || undefined,
+        title: (c) => c.details.note || undefined,
         cell: (c) =>
           editing === c.id ? (
             <input
@@ -213,15 +216,15 @@ export const ConflictsPanel = memo(function ConflictsPanel({
           ) : (
             <button
               type="button"
-              {...readingDirection(c.note || t("conflicts.note"))}
-              aria-label={c.note ? undefined : t("conflicts.note")}
-              className={c.note ? undefined : "muted"}
+              {...readingDirection(c.details.note || t("conflicts.note"))}
+              aria-label={c.details.note ? undefined : t("conflicts.note")}
+              className={c.details.note ? undefined : "muted"}
               onClick={() => {
-                setDraft(c.note);
+                setDraft(c.details.note);
                 setEditing(c.id);
               }}
             >
-              {c.note || t("conflicts.note")}
+              {c.details.note || t("conflicts.note")}
             </button>
           ),
       },
@@ -272,11 +275,11 @@ export const ConflictsPanel = memo(function ConflictsPanel({
           sectionCount
           storageKey="conflicts"
           rowHeight={40}
-          onRowClick={onShow}
+          onRowClick={(finding) => onShow(finding.details)}
           isDisabled={(c) => !showable(c)}
-          rowClass={(c) => (c.status === "open" ? "conflict" : "conflict done")}
+          rowClass={(c) => (c.details.status === "open" ? "conflict" : "conflict done")}
           actions={(c) => (
-            <button type="button" disabled={!showable(c)} onClick={() => onShow(c)}>
+            <button type="button" disabled={!showable(c)} onClick={() => onShow(c.details)}>
               {t("conflicts.show")}
             </button>
           )}

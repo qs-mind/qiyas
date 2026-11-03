@@ -123,6 +123,19 @@ fn cited_rules_clouds_status_and_queries_round_trip_and_undo_together() {
             json!({"type":"resolve_conflict","id":findings[0].id,"status":"resolved","note":"Verified"}),
         );
         let queries = s.conflicts.clone();
+        let shared = s.discrepancy_findings();
+        assert_eq!(shared.len(), queries.len());
+        assert!(shared
+            .iter()
+            .all(|f| f.source == "discrepancy" && !f.citations.is_empty()));
+        assert_eq!(
+            shared
+                .into_iter()
+                .map(qiyas_core::Conflict::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            queries
+        );
         s.save_as(&path).unwrap();
         let mut reopened = Session::open_standalone(&path).unwrap();
         assert_eq!(reopened.conflicts, queries);

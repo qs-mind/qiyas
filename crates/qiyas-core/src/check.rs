@@ -101,26 +101,8 @@ pub struct CheckScope {
     pub rules: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    Error,
-    Warning,
-    Info,
-}
-
-/// One thing to look at.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Finding {
-    pub rule: &'static str,
-    pub pack: &'static str,
-    pub severity: Severity,
-    pub handles: Vec<u64>,
-    /// Where, in drawing coordinates.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub at: Option<[f64; 2]>,
-    pub message: String,
-}
+use crate::finding::Quantity;
+pub use crate::finding::{Finding, Severity};
 
 /// What `check_drawing` found.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -482,8 +464,9 @@ impl Session {
                     .find(|(_, len)| *len < unit(TINY_M));
                 if let Some((a, len)) = tiny {
                     push(Finding {
-                        rule: "tiny_segment",
-                        pack: "general",
+                        quantities: vec![Quantity::new("length", len * to_m, "m")],
+                        rule: "tiny_segment".into(),
+                        pack: "general".into(),
                         severity: Severity::Warning,
                         handles: vec![d.handle],
                         at: Some(a),
@@ -492,6 +475,7 @@ impl Session {
                         } else {
                             format!("a segment only {} long", fmt_m(len))
                         },
+                        ..crate::Finding::drawing()
                     });
                 }
             }
@@ -542,13 +526,14 @@ impl Session {
                 };
                 if raw.contains("\\n") {
                     push(Finding {
-                        rule: "literal_newline",
-                        pack: "general",
+                        rule: "literal_newline".into(),
+                        pack: "general".into(),
                         severity: Severity::Error,
                         handles: vec![e.common().handle.value()],
                         at: None,
                         message: "the text shows \\n as two characters instead of a new line"
                             .into(),
+                        ..crate::Finding::drawing()
                     });
                 }
             }
@@ -577,15 +562,16 @@ impl Session {
                 };
                 if let Some(what) = found {
                     push(Finding {
-                        rule: "internal_id_in_text",
-                        pack: "general",
+                        rule: "internal_id_in_text".into(),
+                        pack: "general".into(),
                         severity: Severity::Warning,
                         handles: vec![e.common().handle.value()],
                         at: None,
                         message: format!(
                             "the text shows {what}: a client sheet shows values, never internal ids, handles or row references"
                         ),
-                    });
+                        ..crate::Finding::drawing()
+});
                 }
             }
         }
@@ -647,8 +633,9 @@ impl Session {
                 );
                 if !agrees {
                     push(Finding {
-                        rule: "dim_override_mismatch",
-                        pack: "general",
+                        quantities: vec![Quantity::new("measured", measured_m, "m")],
+                        rule: "dim_override_mismatch".into(),
+                        pack: "general".into(),
                         severity: Severity::Warning,
                         handles: vec![row.handle],
                         at: Some(row.at),
@@ -656,6 +643,7 @@ impl Session {
                             "the dimension says \"{text}\" but measures {}",
                             fmt_m(measured)
                         ),
+                        ..crate::Finding::drawing()
                     });
                 }
             }
@@ -684,8 +672,8 @@ impl Session {
                     .collect();
                 if !gone.is_empty() {
                     push(Finding {
-                        rule: "unlinked_takeoff",
-                        pack: "construction",
+                        rule: "unlinked_takeoff".into(),
+                        pack: "construction".into(),
                         severity: Severity::Warning,
                         handles: gone,
                         at: None,
@@ -693,6 +681,7 @@ impl Session {
                             "take-off row {} ({}) measures an entity that is gone",
                             m.id, m.description
                         ),
+                        ..crate::Finding::drawing()
                     });
                 }
             }
@@ -723,8 +712,8 @@ impl Session {
             }
             if wanted("layer_zero") && !on_zero.is_empty() {
                 push(Finding {
-                    rule: "layer_zero",
-                    pack: "general",
+                    rule: "layer_zero".into(),
+                    pack: "general".into(),
                     severity: Severity::Warning,
                     message: format!(
                         "{} entities on layer 0: put them on layers named for what they are",
@@ -732,12 +721,13 @@ impl Session {
                     ),
                     handles: on_zero,
                     at: None,
+                    ..crate::Finding::drawing()
                 });
             }
             if wanted("colour_not_bylayer") && !coloured.is_empty() {
                 push(Finding {
-                    rule: "colour_not_bylayer",
-                    pack: "general",
+                    rule: "colour_not_bylayer".into(),
+                    pack: "general".into(),
                     severity: Severity::Info,
                     message: format!(
                         "{} entities have a colour of their own instead of their layer's",
@@ -745,6 +735,7 @@ impl Session {
                     ),
                     handles: coloured,
                     at: None,
+                    ..crate::Finding::drawing()
                 });
             }
         }
@@ -756,18 +747,19 @@ impl Session {
                 Err(error) => {
                     placement_complete = false;
                     found.push(Finding {
-                        rule: "placement",
-                        pack: "placement",
+                        rule: "placement".into(),
+                        pack: "placement".into(),
                         severity: Severity::Warning,
                         handles: vec![],
                         at: None,
                         message: format!("Placement checks are incomplete: {error}"),
+                        ..crate::Finding::drawing()
                     });
                 }
             }
         }
         // Only what the scope asks about, errors first.
-        found.retain(|f| wanted(f.rule));
+        found.retain(|f| wanted(&f.rule));
         if !scope.handles.is_empty() {
             found.retain(|f| f.handles.iter().any(|h| scope.handles.contains(h)));
         }
@@ -781,8 +773,21 @@ impl Session {
         if wanted("job_limit") {
             for row in measurements.iter().filter(|r| r["passed"] == false) {
                 found.push(Finding {
-                    rule: "job_limit",
-                    pack: "general",
+                    details: serde_json::json!({"rule":row["rule"],"metric":row["metric"]}),
+                    quantities: ["measured", "minimum", "maximum"]
+                        .into_iter()
+                        .filter_map(|name| {
+                            Some(crate::finding::Quantity {
+                                name: name.into(),
+                                value: row[name].as_f64()?,
+                                unit: row["unit"].as_str()?.into(),
+                            })
+                        })
+                        .collect(),
+                    citations: serde_json::from_value(row["citations"].clone()).unwrap_or_default(),
+                    passed: Some(false),
+                    rule: "job_limit".into(),
+                    pack: "general".into(),
                     severity: Severity::Warning,
                     handles: row["handle"].as_u64().into_iter().collect(),
                     at: None,
@@ -796,13 +801,23 @@ impl Session {
                         row["maximum"],
                         row["citations"]
                     ),
+                    ..crate::Finding::drawing()
                 });
             }
+        }
+        for finding in &mut found {
+            finding.sheet = Some(sheet.clone());
+            finding.params = serde_json::json!({"message": finding.message});
+            finding.identify(&serde_json::json!([
+                finding.at,
+                finding.details["rule"],
+                finding.details["metric"]
+            ]));
         }
         found.sort_by(|a, b| {
             a.severity
                 .cmp(&b.severity)
-                .then(rank(a.rule).cmp(&rank(b.rule)))
+                .then(rank(&a.rule).cmp(&rank(&b.rule)))
         });
         let mut counts = BTreeMap::new();
         for f in &found {
@@ -898,12 +913,13 @@ impl Session {
                 repeated.insert(first, first);
                 if active(first) || active(d.handle) {
                     push(Finding {
-                        rule: "duplicate",
-                        pack: "general",
+                        rule: "duplicate".into(),
+                        pack: "general".into(),
                         severity: Severity::Error,
                         handles: vec![first, d.handle],
                         at: d.paths.first().and_then(|p| p.points.first().copied()),
                         message: "drawn twice in the same place".into(),
+                        ..crate::Finding::drawing()
                     });
                 }
             } else {
@@ -969,8 +985,8 @@ impl Session {
                 if shared > touch * 10.0 {
                     pairs.insert(key);
                     push(Finding {
-                        rule: "overlap",
-                        pack: "general",
+                        rule: "overlap".into(),
+                        pack: "general".into(),
                         severity: Severity::Warning,
                         handles: vec![h1, h2],
                         at: Some(midpoint(t.a, t.b)),
@@ -978,6 +994,7 @@ impl Session {
                             "two entities lie on each other for {:.3} drawing units",
                             shared
                         ),
+                        ..crate::Finding::drawing()
                     });
                 }
             }
@@ -1032,20 +1049,22 @@ impl Session {
                     let off = |a: f64, b: f64| (a - b).abs() > self.measure_tol() * to_m;
                     if off(lo, blo) || off(hi, bhi) {
                         push(Finding {
-                            rule: "room_size_text_differs",
-                            pack: "construction",
+                            quantities: vec![Quantity::new("label_width", w, "m"), Quantity::new("label_height", h, "m"), Quantity::new("measured_width", bw, "m"), Quantity::new("measured_height", bh, "m")],
+                            rule: "room_size_text_differs".into(),
+                            pack: "construction".into(),
                             severity: Severity::Warning,
                             handles: vec![row.handle],
                             at: Some(at),
                             message: format!(
                                 "the label says {w:.2} × {h:.2} m but the room drawn is {bw:.2} × {bh:.2} m"
                             ),
-                        });
+                            ..crate::Finding::drawing()
+});
                     }
                 }
                 Boundary::None => push(Finding {
-                    rule: "room_open",
-                    pack: "construction",
+                    rule: "room_open".into(),
+                    pack: "construction".into(),
                     severity: Severity::Warning,
                     handles: vec![row.handle],
                     at: Some(at),
@@ -1053,6 +1072,7 @@ impl Session {
                         "\"{}\" sits in no closed space: its walls have a gap",
                         clip(Some(text))
                     ),
+                    ..crate::Finding::drawing()
                 }),
                 Boundary::TooDense => not_checked.push(row.handle),
             }
@@ -1143,12 +1163,13 @@ fn missing_center_marks(
         });
         if !has_mark {
             push(Finding {
-                rule: "missing_center_mark",
-                pack: "general",
+                rule: "missing_center_mark".into(),
+                pack: "general".into(),
                 severity: Severity::Info,
                 handles: vec![e.common().handle.value()],
                 at: Some(at),
                 message: "a circle or full arc has no centre mark or centre line".into(),
+                ..crate::Finding::drawing()
             });
         }
     }
@@ -1220,21 +1241,23 @@ fn end_findings(
             return;
         }
         push(Finding {
-            rule: "overshoot",
-            pack: "general",
+            rule: "overshoot".into(),
+            pack: "general".into(),
             severity: Severity::Warning,
             handles: vec![drawn[own].handle, drawn[other].handle],
             at: Some(c),
             message: format!("runs {} past the line it meets", fmt_m(past)),
+            ..crate::Finding::drawing()
         });
     } else if let Some((d, other)) = nearest.filter(|(d, _)| *d < near) {
         push(Finding {
-            rule: "dangling_end",
-            pack: "general",
+            rule: "dangling_end".into(),
+            pack: "general".into(),
             severity: Severity::Warning,
             handles: vec![drawn[own].handle, drawn[other].handle],
             at: Some(end),
             message: format!("stops {} short of the line next to it", fmt_m(d)),
+            ..crate::Finding::drawing()
         });
     }
 }
@@ -1321,14 +1344,15 @@ fn far_off(
         .fold(0.0_f64, f64::max);
         if outside > 3.0 * size {
             push(Finding {
-                rule: "far_off_extents",
-                pack: "general",
+                rule: "far_off_extents".into(),
+                pack: "general".into(),
                 severity: Severity::Warning,
                 handles: vec![h],
                 at: Some(c),
                 message:
                     "far from the rest of the drawing (a stray entity makes zoom extents useless)"
                         .into(),
+                ..crate::Finding::drawing()
             });
         }
     }

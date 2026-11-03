@@ -38,7 +38,7 @@ fn check(s: &Session) -> CheckReport {
 }
 
 fn rules(r: &CheckReport) -> Vec<&str> {
-    r.findings.iter().map(|f| f.rule).collect()
+    r.findings.iter().map(|f| f.rule.as_str()).collect()
 }
 
 #[test]

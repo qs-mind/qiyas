@@ -1,3 +1,4 @@
+import { packFindings, type PackFindings, type DrawingFindingRecord } from "./findings";
 /** Thin wrappers over the Tauri commands of qiyas-desktop (crates/qiyas-desktop/src/commands.rs). */
 import { invoke, setWorkspace, retainWorkspaces } from "./workspaceIpc";
 import type { TraceTarget } from "./boq/trace";
@@ -1420,7 +1421,7 @@ export type Question = { id: string; question: string; options: QuestionOption[]
 
 export type AgentEvent =
   | { type: "status"; kind: "open_phases" | "requirements" | "saved" | "save_failed"; items: string[]; language: "en" | "ar" }
-  | { type: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
+  | { type: "open_findings"; findings: DrawingFindingRecord[]; revision: unknown }
   | { type: "provider_status"; code: string }
   | { type: "retrying"; seconds: number; code: string; discard_partial: boolean }
   | { type: "text"; text: string }
@@ -1616,12 +1617,12 @@ export type PackCheckLine = {
   fix_ar: string;
 };
 export type PackCheck = { ready: boolean; lines: PackCheckLine[] };
-export async function measurementPackCheck(workspace?: number | null): Promise<PackCheck> {
+export async function measurementPackCheck(workspace?: number | null): Promise<PackFindings> {
   const outcome = await invoke<{ type: "measurement"; result: PackCheck }>("run_command", {
     cmd: { type: "measurement", kind: "pack_check" },
     ...(workspace == null ? {} : { workspace }),
   });
-  return outcome.result;
+  return packFindings(outcome.result);
 }
 
 export type ProjectReply = {

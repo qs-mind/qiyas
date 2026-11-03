@@ -43,8 +43,8 @@ impl Session {
                 // findings by the original touched handles after its broader spatial check.
                 let handles = a.handles.iter().chain(&b.handles).copied().collect();
                 push(Finding {
-                    rule: "part_overlap",
-                    pack: "general",
+                    rule: "part_overlap".into(),
+                    pack: "general".into(),
                     severity: Severity::Warning,
                     handles,
                     at: Some(b.bounds[0]),
@@ -52,6 +52,7 @@ impl Session {
                         "{} ({}) overlaps {} ({}); use arrange to separate the parts",
                         a.label, a.handles[0], b.label, b.handles[0]
                     ),
+                    ..crate::Finding::drawing()
                 });
             }
         }
@@ -67,10 +68,11 @@ impl Session {
                     })
                 {
                     push(Finding {
-                        rule: "part_overlap", pack: "general", severity: Severity::Warning,
+                        rule: "part_overlap".into(), pack: "general".into(), severity: Severity::Warning,
                         handles: part.handles.clone(), at: Some(part.bounds[0]),
                         message: "Content crosses its reserved sheet zone; arrange it or revise the zones / المحتوى يتجاوز منطقته المخصصة باللوحة؛ رتبه أو عدل المناطق".into(),
-                    });
+                        ..crate::Finding::drawing()
+});
                 }
             }
         }
@@ -87,10 +89,11 @@ impl Session {
             && content.iter().any(|h| active(*h))
         {
             push(Finding {
-                rule: "sheet_without_title_block", pack: "general", severity: Severity::Warning,
+                rule: "sheet_without_title_block".into(), pack: "general".into(), severity: Severity::Warning,
                 handles: content, at: None,
                 message: "This sheet has content but no title block; make the sheet with make_sheet or add title_block".into(),
-            });
+                ..crate::Finding::drawing()
+});
         }
     }
 
@@ -106,12 +109,12 @@ impl Session {
         #[cfg(any(test, feature = "fixtures"))]
         let _profile = crate::fixtures::profile::span("check_layout.check_layout_ink");
         let mut seen = HashSet::new();
-        let mut report = |rule, a: u64, b: u64, at, message: String| {
+        let mut report = |rule: &'static str, a: u64, b: u64, at, message: String| {
             let key = (rule, a.min(b), a.max(b));
             if seen.insert(key) {
                 push(Finding {
-                    rule,
-                    pack: "general",
+                    rule: rule.into(),
+                    pack: "general".into(),
                     severity: Severity::Warning,
                     handles: if b == 0 || a == b {
                         vec![a]
@@ -120,6 +123,7 @@ impl Session {
                     },
                     at: Some(at),
                     message,
+                    ..Finding::drawing()
                 });
             }
         };

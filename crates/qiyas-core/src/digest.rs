@@ -291,6 +291,24 @@ impl Session {
         expectations: &[crate::verify::Expectation],
         end_report: &str,
     ) -> Result<Value, CoreError> {
+        let report = self.takeoff_findings(expectations, end_report)?;
+        Ok(page(
+            report.overview,
+            report
+                .summaries
+                .into_iter()
+                .chain(report.findings.into_iter().map(crate::Finding::into_record))
+                .collect(),
+            offset,
+        ))
+    }
+
+    /// Complete typed findings; the public take-off adapter retains its paged evidence records.
+    pub fn takeoff_findings(
+        &self,
+        expectations: &[crate::verify::Expectation],
+        end_report: &str,
+    ) -> Result<crate::finding::FindingReport, CoreError> {
         let objects = self.objects(&ObjectFilter::default())?;
         let evidence = self.recognition_evidence()?;
         let valid: BTreeSet<_> = objects
@@ -622,14 +640,14 @@ impl Session {
         overview["outside_check"] = self.outside_summary(end_report)?;
         overview["pack_check"] = json!(self
             .pack_check()?
-            .lines
+            .findings
             .iter()
-            .filter(|line| !line.passes)
+            .filter(|line| line.passed == Some(false))
             .count());
         overview["shared_source"] = json!(shared_source_count);
         overview["measurement_summary"] = json!({"measured":[],"deductions":[],"factors":[]});
         overview["measurement_summary_detail"] = json!("Page with next_offset as offset. Text is previewed; explain generated:<item> has full operands and sources.");
-        let mut summary = measurement_summary::rows(self, &report)?;
+        let summary = measurement_summary::rows(self, &report)?;
         if serde_json::to_vec(&overview).unwrap().len() > MAX_BYTES / 2 {
             let sheets = overview["outside_check"]["sheets"].take();
             overview["outside_check"]["sheets"] = json!({});
@@ -641,8 +659,47 @@ impl Session {
                 }
             }
         }
-        summary.extend(detail);
-        Ok(page(overview, summary, offset))
+        Ok(crate::finding::FindingReport {
+            overview,
+            summaries: summary,
+            findings: detail
+                .into_iter()
+                .map(|row| {
+                    let mut finding = crate::Finding::from_record("takeoff_check", row);
+                    if finding.sheet.is_none() {
+                        finding.sheet = finding
+                            .handles
+                            .first()
+                            .and_then(|h| self.drawing.doc.get_entity(Handle::new(*h)))
+                            .and_then(|e| {
+                                self.drawing
+                                    .doc
+                                    .block_records
+                                    .iter()
+                                    .find(|block| block.handle == e.common().owner_handle)
+                                    .map(|block| block.name.clone())
+                            });
+                    }
+                    if matches!(
+                        finding.rule.as_str(),
+                        "fractional_count" | "deductions_exceed_gross" | "unmapped_quantities"
+                    ) {
+                        for quantity in report.quantities.iter().filter(|q| {
+                            finding.handles.contains(&q.object)
+                                && finding.details["rule"].as_str() == Some(q.rule.as_str())
+                        }) {
+                            finding.quantities.push(crate::finding::Quantity {
+                                name: "measured".into(),
+                                value: quantity.quantity,
+                                unit: quantity.unit.clone(),
+                            });
+                            finding.citations.push(quantity.citation.clone());
+                        }
+                    }
+                    finding
+                })
+                .collect(),
+        })
     }
 }
 

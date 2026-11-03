@@ -1,3 +1,4 @@
+import { drawingFinding, type Finding } from "../findings";
 /** The assistant's transcript, built from the agent's events by a pure reducer. */
 import type { Activity, AgentEvent, AiUi, ExpertFrame, PlanPhase, Question, TranscriptEntry } from "../api";
 
@@ -36,7 +37,7 @@ export type Attached = { pointed?: string[]; images?: string[] };
 export type Item =
   | { kind: "status"; status: Extract<AgentEvent, { type: "status" }> }
   | { kind: "cache_usage"; cached: number; total: number }
-  | { kind: "open_findings"; findings: { rule: string; message: string; handles: number[] }[]; revision: unknown }
+  | { kind: "open_findings"; findings: Finding[]; revision: unknown }
   | { kind: "provider_status"; code: string }
   | ({ kind: "user"; text: string } & Attached)
   /** Streamed: `finished` once anything else follows it or the turn ends. */
@@ -89,7 +90,7 @@ export function reduce(state: Transcript, action: Action): Transcript {
     case "status":
       return { items: [...finishText(items), { kind: "status", status: action }] };
     case "open_findings":
-      return { items: [...finishText(items), { kind: "open_findings", findings: action.findings, revision: action.revision }] };
+      return { items: [...finishText(items), { kind: "open_findings", findings: action.findings.map(drawingFinding), revision: action.revision }] };
     case "user": {
       const { type: _, ...item } = action;
       return { items: [...finishText(items), { ...item, kind: "user" }] };

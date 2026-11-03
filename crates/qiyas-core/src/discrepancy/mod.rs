@@ -10,7 +10,7 @@ use crate::{
     Outcome, Session, Source,
 };
 pub use accuracy::{accuracy, net_room_accuracy, Accuracy, NetRoomAccuracy};
-pub use compare::{compare, CompareInputs};
+pub use compare::{compare, compare_findings, CompareInputs};
 pub use rules::{CheckRule, Set, TableSource, Test, Tolerance};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -143,7 +143,24 @@ impl Session {
     }
 
     pub fn evaluate_check_rules(&self) -> Result<Vec<Conflict>, CoreError> {
-        rules::evaluate(self)
+        self.check_rule_findings().map(|findings| {
+            findings
+                .into_iter()
+                .map(|finding| Conflict::try_from(finding).expect("query finding"))
+                .collect()
+        })
+    }
+
+    pub fn check_rule_findings(&self) -> Result<Vec<crate::Finding>, CoreError> {
+        Ok(rules::evaluate(self)?
+            .iter()
+            .map(crate::Finding::from)
+            .collect())
+    }
+
+    /// Current saved queries, using the same item shape as the read-only checks.
+    pub fn discrepancy_findings(&self) -> Vec<crate::Finding> {
+        self.conflicts.iter().map(crate::Finding::from).collect()
     }
     pub(crate) fn run_discrepancy_check(
         &mut self,

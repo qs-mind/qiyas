@@ -1,3 +1,4 @@
+import { findingText, type Finding } from "../findings";
 /** One entry of Mizan's thread: the user's message, Mizan's answer, its questions, plan and steps,
  *  and the notices between them. */
 import { memo, type ReactNode } from "react";
@@ -95,14 +96,24 @@ export const ThreadItem = memo(function ThreadItem({ item, i, cx, id }: { item: 
     }
     case "assistant":
       return <div className="msg assistant"><Markdown text={plainDashes(item.text)} /></div>;
-    case "open_findings":
+    case "open_findings": {
+      const groups = new Map<string, { finding: Finding; count: number }>();
+      for (const finding of item.findings) {
+        const key = JSON.stringify([finding.source, finding.pack, finding.rule]);
+        const group = groups.get(key);
+        if (group) group.count += 1;
+        else groups.set(key, { finding, count: 1 });
+      }
       return <div className="msg notice" role="note" lang={cx.chatLang} dir={cx.chatLang === "ar" ? "rtl" : "ltr"}>
         <strong className="heading">{said("ai.openFindings")}</strong>
-        <ul>{[...new Set(item.findings.map(finding => finding.rule))].map(rule =>
-          <li key={rule}>{said(`ai.finding.${rule}`)} ({item.findings.filter(finding => finding.rule === rule).length})</li>,
-        )}</ul>
+        <ul>{[...groups].map(([key, { finding, count }]) => {
+          const translated = finding.message_key ? said(finding.message_key) : "";
+          const label = translated && translated !== finding.message_key ? translated : findingText(finding, cx.chatLang);
+          return <li key={key}>{label} ({count})</li>;
+        })}</ul>
         {cx.showTechnicalDetails && <details className="technical-details"><summary>{t("technical.details")}</summary><pre dir="ltr">{JSON.stringify(item.findings, null, 2)}</pre></details>}
       </div>;
+    }
     case "thinking":
       return null;
     case "tool": {

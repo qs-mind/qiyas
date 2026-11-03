@@ -40,6 +40,18 @@ const QUOTE: usize = 60;
 /// items with no tolerance of their own. A conflict found before (same id in `previous`) keeps
 /// its status, note and creation time.
 pub fn compare(inputs: &CompareInputs, default_tol: f64, previous: &[Conflict]) -> Vec<Conflict> {
+    compare_findings(inputs, default_tol, previous)
+        .into_iter()
+        .map(|finding| Conflict::try_from(finding).expect("comparison finding"))
+        .collect()
+}
+
+/// Shared findings; `compare` is the saved-query and take-off crate compatibility adapter.
+pub fn compare_findings(
+    inputs: &CompareInputs,
+    default_tol: f64,
+    previous: &[Conflict],
+) -> Vec<crate::Finding> {
     let mut found = Vec::new();
     let quantities: Vec<&Measurement> = inputs
         .takeoff
@@ -101,7 +113,7 @@ pub fn compare(inputs: &CompareInputs, default_tol: f64, previous: &[Conflict]) 
                 c.note.clone_from(&old.note);
                 c.created.clone_from(&old.created);
             }
-            c
+            crate::Finding::from(&c)
         })
         .collect()
 }

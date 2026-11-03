@@ -1884,7 +1884,7 @@ impl Agent {
                         f.severity,
                         qiyas_core::check::Severity::Error | qiyas_core::check::Severity::Warning
                     ) && f.handles.iter().any(|h| handles.contains(h))
-                        && !baseline.contains(&finding_id(&report.sheet, f))
+                        && !finding_was_present(&baseline, &report.sheet, f)
                 })
                 .map(|f| serde_json::json!(f))
                 .collect();
@@ -3051,10 +3051,22 @@ fn check_turn(
     }
 }
 
-fn finding_id(sheet: &str, finding: &qiyas_core::check::Finding) -> String {
+fn finding_id(_sheet: &str, finding: &qiyas_core::Finding) -> String {
+    finding.id.clone()
+}
+
+fn finding_was_present(
+    baseline: &BTreeSet<String>,
+    sheet: &str,
+    finding: &qiyas_core::Finding,
+) -> bool {
+    if baseline.contains(&finding.id) {
+        return true;
+    }
+    // Conversations saved before shared findings used this identity.
     let mut handles = finding.handles.clone();
     handles.sort_unstable();
-    format!("{}:{}:{:?}", sheet, finding.rule, handles)
+    baseline.contains(&format!("{}:{}:{:?}", sheet, finding.rule, handles))
 }
 
 /// Stable error identities allow a phase to repair its own changes before asking for review.
@@ -4237,5 +4249,32 @@ mod provider_failure_tests {
         let counts = TurnCounts::default();
         assert!(agent.end_gate(&counts).is_some());
         assert!(agent.end_gate(&counts).is_none());
+    }
+}
+
+#[cfg(test)]
+mod finding_identity_tests {
+    use super::*;
+
+    #[test]
+    fn resumed_phases_recognize_legacy_and_shared_baseline_ids() {
+        let finding = qiyas_core::Finding {
+            id: "new-id".into(),
+            rule: "overlap".into(),
+            handles: vec![901, 900],
+            ..qiyas_core::Finding::drawing()
+        };
+        for id in ["new-id", "Podium:overlap:[900, 901]"] {
+            assert!(finding_was_present(
+                &BTreeSet::from([id.to_owned()]),
+                "Podium",
+                &finding
+            ));
+        }
+        assert!(!finding_was_present(
+            &BTreeSet::from(["Tower:overlap:[900, 901]".into()]),
+            "Podium",
+            &finding
+        ));
     }
 }

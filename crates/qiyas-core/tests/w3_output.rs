@@ -1224,16 +1224,19 @@ fn the_pack_card_flags_a_drawing_without_units_and_names_the_fix() {
     let s = Session::new_blank(&dir.path().join("nounits.dwg"), 0);
     let card = s.pack_check().unwrap();
     let units = card.line("units").unwrap();
-    assert!(!units.passes && !card.ready);
-    assert!(units.found_en.contains("INSUNITS 0"), "{units:?}");
-    assert!(!units.fix_en.is_empty() && !units.fix_ar.is_empty());
+    assert!(!units.passed.unwrap() && !card.ready);
+    assert!(units.message.contains("INSUNITS 0"), "{units:?}");
+    assert!(
+        !units.details["fix_en"].as_str().unwrap().is_empty()
+            && !units.details["fix_ar"].as_str().unwrap().is_empty()
+    );
 
     for known in UNITS {
         let s = Session::new_blank(&dir.path().join(format!("u{known}.dwg")), known);
         let card = s.pack_check().unwrap();
-        assert!(card.line("units").unwrap().passes, "units {known}");
+        assert!(card.line("units").unwrap().passed.unwrap(), "units {known}");
         assert!(
-            card.line("annotation_scale").unwrap().passes,
+            card.line("annotation_scale").unwrap().passed.unwrap(),
             "units {known}"
         );
         // No PDF or picture: no PDF lines on a short card.
@@ -1248,7 +1251,11 @@ fn the_pack_card_asks_where_the_sheet_number_and_revision_are_written() {
     let card = s.pack_check().unwrap();
     let line = card.line("register").unwrap();
     assert!(
-        !line.passes && line.fix_en.contains("sheet number"),
+        !line.passed.unwrap()
+            && line.details["fix_en"]
+                .as_str()
+                .unwrap()
+                .contains("sheet number"),
         "{line:?}"
     );
 }
@@ -2155,9 +2162,13 @@ fn takeoff_overview_counts_failing_drawing_pack_lines_and_registry_exposes_the_c
     let dir = tempfile::tempdir().unwrap();
     let s = Session::new_blank(&dir.path().join("tower-podium-register.dwg"), 6);
     let card = s.pack_check().unwrap();
-    assert!(!card.line("register").unwrap().passes);
+    assert!(!card.line("register").unwrap().passed.unwrap());
     let check = s.takeoff_check(0, &[]).unwrap();
-    let failures = card.lines.iter().filter(|line| !line.passes).count();
+    let failures = card
+        .findings
+        .iter()
+        .filter(|line| !line.passed.unwrap())
+        .count();
     assert!(failures >= 1);
     assert_eq!(check["pack_check"], failures);
     assert!(serde_json::to_vec(&check).unwrap().len() <= 6144);

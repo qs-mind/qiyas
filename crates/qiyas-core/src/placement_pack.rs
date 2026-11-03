@@ -317,8 +317,18 @@ impl Session {
 
 fn finding(rule: &Rule, handles: Vec<u64>, at: Option<[f64; 2]>, message: &str) -> Finding {
     Finding {
-        rule: "placement",
-        pack: "placement",
+        details: serde_json::json!({"rule":rule.name}),
+        citations: vec![crate::measurement::Citation {
+            source: rule.citation.clone(),
+            clause: rule.name.clone(),
+        }],
+        quantities: vec![crate::finding::Quantity {
+            name: "tolerance".into(),
+            value: rule.tolerance_m,
+            unit: "m".into(),
+        }],
+        rule: "placement".into(),
+        pack: "placement".into(),
         severity: Severity::Warning,
         handles,
         at,
@@ -326,6 +336,7 @@ fn finding(rule: &Rule, handles: Vec<u64>, at: Option<[f64; 2]>, message: &str) 
             "{}: {message}. Tolerance {} m. {}",
             rule.name, rule.tolerance_m, rule.citation
         ),
+        ..crate::Finding::drawing()
     }
 }
 

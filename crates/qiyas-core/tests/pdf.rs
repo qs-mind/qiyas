@@ -454,12 +454,12 @@ fn the_pack_card_calls_a_vector_page_vector_and_reads_its_orientation() {
         .line("pdf_pages")
         .expect("a PDF page is on the drawing");
     assert!(
-        pages.passes && pages.found_en.contains("vector"),
+        pages.passed.unwrap() && pages.message.contains("vector"),
         "{pages:?}"
     );
     // A vector page needs no calibration line; it is stored upright.
     assert!(card.line("calibration").is_none());
-    assert!(card.line("orientation").unwrap().passes);
+    assert!(card.line("orientation").unwrap().passed.unwrap());
     assert_eq!(qiyas_pdf::page_rotation(&pdf, 1).unwrap(), 0);
 }
 
@@ -478,8 +478,8 @@ fn the_pack_card_says_when_a_pdf_page_cannot_be_read() {
     let card = session.pack_check().unwrap();
     let pages = card.line("pdf_pages").unwrap();
     assert!(
-        !pages.passes && pages.found_en.contains("Could not read"),
+        !pages.passed.unwrap() && pages.message.contains("Could not read"),
         "{pages:?}"
     );
-    assert!(!pages.fix_en.is_empty());
+    assert!(!pages.details["fix_en"].as_str().unwrap().is_empty());
 }

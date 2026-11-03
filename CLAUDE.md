@@ -882,7 +882,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   (about 3.55e-15 relative), with no absolute allowance near zero. Thus 58.29 and
   58.28999999999999 agree, but 58.29 and 58.30 differ. The shared core/take-off comparison
   and BOQ panel use this same numerical allowance; it is not a design or job tolerance.
-- Findings carry `query` metadata: severity, source citations, bilingual question, evidence
+- The saved `Conflict` adapter carries `query` metadata: severity, source citations, bilingual question, evidence
   handles/sheets/grids, rule identity and cloud handles. Stable finding ids retain statuses and
   notes on repeated checks. The drawing's `queries/result` XRecord stores the list; standalone
   DWG/DXF reopen restores it without a sidecar. Resolution and comparison are each one undo
@@ -2057,6 +2057,27 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - The same five are AI tools: `measure_geometry`, `divide_along`, `measure_along` (step in
   metres), `id_point`, `extract_data` (paged under 40 KB).
 
+## Shared findings
+
+- `qiyas-core/src/finding.rs` owns `Finding`: stable id, source module, rule and pack,
+  severity (`error`, `warning`, `info`), English/Arabic text or message key and parameters,
+  handles, sheet, drawing position, named quantities with units, citations and optional `passed`.
+  Rule-specific evidence stays in `details`. IDs exclude wording and measured values; drawing
+  rules distinguish locations and supplied rule subjects. Legacy evidence without a subject uses
+  its message as the identity fallback. Existing discrepancy ids are retained.
+- Drawing `CheckReport.findings`, `pack_check().findings`, `takeoff_findings`,
+  `outside_findings`, `discrepancy::compare_findings`, `check_rule_findings` and
+  `discrepancy_findings` use this item type. Each report retains its own overview, counts,
+  coverage and summary data. Pack observations that pass are informational findings.
+- Compatibility adapters keep `takeoff_check` / `outside_check` paged evidence records and
+  byte budgets, `measurement.pack_check` pass/fix lines, and `Conflict` records for
+  `queries/result`, the exported Queries sheet and the public comparison API. Saved status,
+  notes, creation time, citations, grids, sheets and cloud handles survive conversion.
+- The window adapts these wire records in `src/findings.ts`; the discrepancies panel, pack
+  card and Mizan's open findings read the common shape. Old conversation events with only
+  rule, message and handles remain readable; new drawing events carry the full finding.
+  Resumed Mizan phases recognize both old baseline ids and the shared ids.
+
 ## Drawing check
 
 - `qiyas-core/src/check.rs`: `Command::CheckDrawing { scope }` (`Session::check_drawing`)
@@ -2094,7 +2115,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   execute successfully; there is no allowlist of refused examples. Harder cases cover closed
   wall loops, junctions, openings near ends and corners, and small curves. No error or warning
   is accepted; informational notes are allowed.
-- `Outcome::Checked` gives each finding's rule, pack, severity, handles, place and message,
+- `Outcome::Checked` gives shared `Finding` items (including stable ids and sheet),
   counts by rule and a short summary. At most 200 findings are listed; every text and room
   candidate is inspected. `checked_rules`, `complete` and `not_checked` disclose coverage.
   Nested geometry limits, unsupported multileaders/viewports and dense room tracing make the
@@ -3820,8 +3841,9 @@ review of a take-off; every evidence page carries For review / للمراجعة.
   `crates/qiyas-core/tests/w3_output.rs`.
 - Drawing-pack card: `crates/qiyas-core/src/pack_check.rs`, read by `measurement.pack_check`,
   checks known units, annotation scale, vector/scanned PDF pages, scan calibration, page
-  orientation, and sheet number/revision from the register rules. Each line passes or names
-  the fix; calibration is recorded by the existing calibration command.
+  orientation, and sheet number/revision from the register rules. Each shared finding passes
+  or names the fix; the command adapter keeps the existing bilingual pass/fix lines.
+  Calibration is recorded by the existing calibration command.
 - Evidence PDF: `crates/qiyas-plot/src/evidence.rs` uses the existing plot snapshots, page maps
   and embedded text fonts. Each source sheet has heavy coloured outlines and BOQ item codes
   beside its elements, plus a legend of code, description, quantity and unit in the BOQ's

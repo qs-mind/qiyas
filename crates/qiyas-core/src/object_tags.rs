@@ -580,14 +580,15 @@ impl Session {
                     .is_none_or(|h| self.drawing.doc.get_entity(Handle::new(h)).is_none());
             if expected.is_none() || actual != expected || missing_symbol {
                 push(crate::check::Finding {
-                    rule: "object_tag_mismatch",
-                    pack: "general",
+                    rule: "object_tag_mismatch".into(),
+                    pack: "general".into(),
                     severity: crate::check::Severity::Warning,
                     handles: vec![e.common().handle.value()],
                     at: None,
                     message: "A linked tag has lost its object or symbol, or differs from its property / فقد الرمز المرتبط عنصره أو شكله، أو يختلف عن خاصيته"
                         .into(),
-                });
+                    ..crate::Finding::drawing()
+});
             }
         }
     }
@@ -627,8 +628,8 @@ impl Session {
             return;
         }
         push(crate::check::Finding {
-            rule: "opening_untagged",
-            pack: "construction",
+            rule: "opening_untagged".into(),
+            pack: "construction".into(),
             severity: crate::check::Severity::Warning,
             message: format!(
                 "{} doors or windows have no tag on the plan, so their schedule marks cannot be found: object_tags {{\"category\":\"opening\",\"property\":\"mark\"}} tags them all",
@@ -636,6 +637,7 @@ impl Session {
             ),
             handles: missing.into_iter().take(100).collect(),
             at: None,
-        });
+            ..crate::Finding::drawing()
+});
     }
 }

@@ -14,36 +14,24 @@ use opencadcodec::EntityType;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::finding::Severity;
 use crate::knowledge::{self, Kind};
-use crate::{CoreError, Session, Units};
+use crate::{CoreError, Finding, Session, Units};
 
 /// The knowledge entry (under the measurement kind) that lists the pictures calibrated.
 const CALIBRATED: &str = "calibrated";
-
-/// One line of the card.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PackLine {
-    pub id: String,
-    pub passes: bool,
-    /// What was found, in English and Arabic.
-    pub found_en: String,
-    pub found_ar: String,
-    /// What to do, when it does not pass.
-    pub fix_en: String,
-    pub fix_ar: String,
-}
 
 /// The card.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackCard {
     /// Every line passes.
     pub ready: bool,
-    pub lines: Vec<PackLine>,
+    pub findings: Vec<Finding>,
 }
 
 impl PackCard {
-    pub fn line(&self, id: &str) -> Option<&PackLine> {
-        self.lines.iter().find(|l| l.id == id)
+    pub fn line(&self, id: &str) -> Option<&Finding> {
+        self.findings.iter().find(|l| l.rule == id)
     }
 }
 
@@ -54,15 +42,24 @@ fn both(en: impl Into<String>, ar: impl Into<String>) -> Pair {
     (en.into(), ar.into())
 }
 
-fn line(id: &str, passes: bool, found: Pair, fix: Pair) -> PackLine {
-    PackLine {
-        id: id.into(),
-        passes,
-        found_en: found.0,
-        found_ar: found.1,
-        fix_en: if passes { String::new() } else { fix.0 },
-        fix_ar: if passes { String::new() } else { fix.1 },
-    }
+fn line(id: &str, passes: bool, found: Pair, fix: Pair) -> Finding {
+    let mut finding = Finding {
+        rule: id.into(),
+        pack: "measurement".into(),
+        source: "pack_check".into(),
+        severity: if passes {
+            Severity::Info
+        } else {
+            Severity::Warning
+        },
+        message: found.0,
+        message_ar: found.1,
+        passed: Some(passes),
+        details: json!({"fix_en": if passes { "" } else { &fix.0 }, "fix_ar": if passes { "" } else { &fix.1 }}),
+        ..Finding::default()
+    };
+    finding.identify(&Value::Null);
+    finding
 }
 
 /// A PDF page or an image placed in the drawing.
@@ -167,12 +164,12 @@ impl Session {
         }
         lines.push(self.register_line()?);
         Ok(PackCard {
-            ready: lines.iter().all(|l| l.passes),
-            lines,
+            ready: lines.iter().all(|l| l.passed == Some(true)),
+            findings: lines,
         })
     }
 
-    fn units_line(&self) -> PackLine {
+    fn units_line(&self) -> Finding {
         let known = self.drawing.units != Units::Unknown;
         let found = if known {
             both("The drawing's units are known.", "وحدات الرسم معروفة.")
@@ -193,7 +190,7 @@ impl Session {
         )
     }
 
-    fn annotation_line(&self) -> PackLine {
+    fn annotation_line(&self) -> Finding {
         let set = self
             .drawing
             .doc
@@ -229,7 +226,7 @@ impl Session {
         )
     }
 
-    fn picture_lines(&self, pictures: &[Picture]) -> Result<Vec<PackLine>, CoreError> {
+    fn picture_lines(&self, pictures: &[Picture]) -> Result<Vec<Finding>, CoreError> {
         let calibrated = self.calibrated_pictures()?;
         let pdfium = qiyas_pdf::available();
         let mut kinds = Vec::new();
@@ -345,7 +342,7 @@ impl Session {
         Ok(out)
     }
 
-    fn register_line(&self) -> Result<PackLine, CoreError> {
+    fn register_line(&self) -> Result<Finding, CoreError> {
         let mut rules =
             crate::deliverables::default_layout(crate::deliverables::Kind::Register).register_rules;
         if let Some(entry) = knowledge::get(&self.drawing.doc, Kind::Reports, "register")? {
@@ -422,7 +419,10 @@ impl Session {
 
 /// The card as the JSON `measurement.pack_check` returns.
 pub fn as_json(card: &PackCard) -> Value {
-    json!(card)
+    json!({"ready":card.ready,"lines":card.findings.iter().map(|f| json!({
+        "id":f.rule,"passes":f.passed == Some(true),"found_en":f.message,"found_ar":f.message_ar,
+        "fix_en":f.details["fix_en"],"fix_ar":f.details["fix_ar"]
+    })).collect::<Vec<_>>()})
 }
 
 #[cfg(test)]
@@ -432,8 +432,8 @@ mod tests {
     #[test]
     fn a_line_that_passes_names_no_fix() {
         let l = line("x", true, both("ok", "تمام"), both("do this", "افعل هذا"));
-        assert!(l.fix_en.is_empty() && l.fix_ar.is_empty());
+        assert!(l.details["fix_en"] == "" && l.details["fix_ar"] == "");
         let l = line("x", false, both("bad", "سيئ"), both("do this", "افعل هذا"));
-        assert_eq!(l.fix_en, "do this");
+        assert_eq!(l.details["fix_en"], "do this");
     }
 }
