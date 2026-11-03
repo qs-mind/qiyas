@@ -1294,7 +1294,7 @@ fn label_spaces_fits_unapproved_candidate_areas_and_a_schedule_follows() {
         rules: vec![
             "label_outside_room".into(),
             "text_over_lines".into(),
-            "text_overlaps_text".into(),
+            "text_over_text".into(),
         ],
         ..Default::default()
     });

@@ -125,7 +125,19 @@ pub(crate) fn write_contents(
     for item in &report.items {
         for line in qiyas_core::deliverables::printed_lines(item) {
             sheet.write_string(row, 0, &item.code)?;
-            sheet.write_string(row, 1, &line.label)?;
+            sheet.write_string(
+                row,
+                1,
+                if line.wall_area_basis.is_some() {
+                    format!(
+                        "{} / {}",
+                        line.display_label(false),
+                        line.display_label(true)
+                    )
+                } else {
+                    line.label.clone()
+                },
+            )?;
             sheet.write_string(row, 2, format!("{:?}", line.operation))?;
             sheet.write_number(row, 3, line.timesing)?;
             sheet.write_string(

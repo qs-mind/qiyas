@@ -209,7 +209,7 @@ fn strip_height() -> f64 {
     8.0 * (crate::layouts::SHEET_FIELDS.len() - 1) as f64 + 14.0
 }
 
-fn zones_of(w: f64, h: f64, revisions: &[SheetRevision]) -> SheetZones {
+pub(crate) fn zones_of(w: f64, h: f64, revisions: &[SheetRevision]) -> SheetZones {
     let strip_top = MARGIN_MM + strip_height() + crate::layouts::revision_height(revisions);
     let block_left = w - MARGIN_MM - 180.0_f64.min(w - MARGIN_MM - BINDING_MM);
     SheetZones {
@@ -353,7 +353,7 @@ fn partition_inner(
 }
 
 /// The smallest standard scale denominator at which a model `w_m` x `h_m` metres fits `zone`
-/// with an inner margin on every side; `None` when even 1:10000 does not.
+/// with an inner margin on every side; `None` when the rectangle has no usable area.
 fn best_denominator(w_m: f64, h_m: f64, zone: &Zone) -> Option<f64> {
     let (avail_w, avail_h) = (
         zone.right - zone.left - 2.0 * GAP_MM,
@@ -362,9 +362,29 @@ fn best_denominator(w_m: f64, h_m: f64, zone: &Zone) -> Option<f64> {
     if avail_w <= 0.0 || avail_h <= 0.0 {
         return None;
     }
+    fitting_denominator([w_m * 1000.0, h_m * 1000.0], [avail_w, avail_h])
+}
+
+/// Model size in millimetres and available paper size in millimetres.
+pub(crate) fn fitting_denominator(model_mm: [f64; 2], paper_mm: [f64; 2]) -> Option<f64> {
+    if model_mm
+        .iter()
+        .chain(&paper_mm)
+        .any(|v| !v.is_finite() || *v <= 0.0)
+    {
+        return None;
+    }
+    let required = (model_mm[0] / paper_mm[0]).max(model_mm[1] / paper_mm[1]);
     STANDARD_SCALES
         .into_iter()
-        .find(|den| w_m * 1000.0 / den <= avail_w && h_m * 1000.0 / den <= avail_h)
+        .find(|d| *d + 1e-9 >= required)
+        .or_else(|| {
+            let base = 10.0_f64.powf(required.log10().floor());
+            [1.0, 2.0, 5.0, 10.0]
+                .into_iter()
+                .map(|n| n * base)
+                .find(|d| d.is_finite() && *d >= required)
+        })
 }
 
 impl Session {
@@ -392,6 +412,10 @@ impl Session {
             .language
             .or(self.sheet_language())
             .unwrap_or(LabelLanguage::En);
+        let shown = std::mem::replace(&mut self.sheet, "*Model_Space".into());
+        let repaired = self.declutter_annotations("*Model_Space", None, spec.model_bounds);
+        self.sheet = shown;
+        repaired?;
         let bounds = spec.model_bounds.or_else(|| self.model_window()).ok_or_else(|| {
             invalid("Model has nothing to put on a sheet: draw first, or give model_bounds / لا توجد عناصر في النموذج؛ ارسم أو حدد حدود النموذج")
         })?;
@@ -534,6 +558,9 @@ impl Session {
         let (paper, orientation, den, zones, parts, splits) = chosen.ok_or_else(|| invalid(
             "The requested scale needs fitting split lines outside the supplied cores; give split_lines, another paper or scale / المقياس المطلوب يحتاج خطوط فصل مناسبة خارج النوى المحددة؛ حدد خطوط الفصل أو ورقا أو مقياس آخر"
         ))?;
+        if forced.is_some() && parts.len() == 1 {
+            self.advise_viewport_fill(bounds, 1000.0 * to_m / den, zones.plans);
+        }
         let scale_text = format!("1:{den}");
         let names: Vec<_> = (0..parts.len())
             .map(|i| {
@@ -610,6 +637,7 @@ impl Session {
                     &zones,
                     parts.len() > 1,
                 )?;
+                self.remember_viewport_fit(viewport, *part, spec.scale.is_none())?;
                 let app = crate::xdata::register(&mut self.drawing.doc, ZONES_APP);
                 crate::xdata::write_json(
                     self.drawing

@@ -254,3 +254,59 @@ fn every_output_says_it_is_for_review() {
         .iter()
         .any(|(_, text)| text.contains("Status: For review")));
 }
+
+#[test]
+fn wall_junction_basis_is_visible_in_both_export_languages_and_the_takeoff_workbook() {
+    let (dir, mut s) = terminal();
+    let cite = json!({"source":"Test drawing","clause":"Joined walls with hosted openings"});
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_mappings","mappings":[{
+        "rule":"wall","code":"W","description_en":"Wall area","description_ar":"مساحة الحوائط",
+        "section":"Walls","trade":"wall","unit":"m2","citation":cite}]}),
+    );
+    run(
+        &mut s,
+        json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
+        "name":"Wall geometry","title":"Test geometry","based_on":"drawing","source_note":"Test fixture",
+        "rules":[{"id":"wall","kind":"area","basis":"geometric","element_type":"Legacy wall","unit":"m2","citation":cite,
+        "terms":[{"label":"Wall area","operation":"add","factors":["geometry.net_area"],"citation":cite}]}]}}),
+    );
+    for (language, label) in [
+        (Language::En, "Net of openings and wall junctions"),
+        (
+            Language::Ar,
+            "الصافي بعد خصم الفتحات وتداخلات التقاء الحوائط",
+        ),
+    ] {
+        for kind in [Kind::Boq, Kind::Dimensions] {
+            let report = deliverables::drawing(&s, kind, language, None).unwrap();
+            let path = dir.path().join(format!("wall-{kind:?}-{language:?}.xlsx"));
+            qiyas_boq::deliverables::write(&Export {
+                path: path.clone(),
+                format: Format::Excel,
+                report,
+            })
+            .unwrap();
+            assert!(visible_text(&path)
+                .iter()
+                .any(|(_, text)| text.contains(label)));
+        }
+    }
+    let path = dir.path().join("wall-takeoff.xlsx");
+    qiyas_boq::export_takeoff_with_report(
+        &path,
+        &s.takeoff.items,
+        &s.takeoff.totals(),
+        "Walls",
+        &s.measurement_report().unwrap(),
+    )
+    .unwrap();
+    let text = visible_text(&path)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Net of openings and wall junctions"));
+    assert!(text.contains("الصافي بعد خصم الفتحات وتداخلات التقاء الحوائط"));
+}

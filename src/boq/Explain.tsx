@@ -1,11 +1,12 @@
 import { readingDirection } from "../ai/content";
 import { useId, useState } from "react";
 import { explainItem, type Explanation } from "../api";
-import { useT } from "../i18n";
+import { useLanguage, useT } from "../i18n";
 import { uiError } from "../i18n/errors";
 import { ModalDialog } from "../ui/ModalDialog";
 import { TechnicalDetails, ReviewNotes } from "../shell/TechnicalDetails";
 import { trace } from "./trace";
+import { lineLabel } from "./calculated";
 
 export const EXPLAIN_EVIDENCE = "qiyas:explain-evidence";
 export type Evidence = { handle: number; sheet: string; drawing: string };
@@ -19,6 +20,7 @@ export function Formula({ expression, value, unit }: { expression: string; value
 
 /** One read supplies the same evidence to the window and the automation tools. */
 export function Explain({ item, project }: { item: string; project?: string }) {
+  const { lang } = useLanguage();
   const t = useT();
   const title = t("evidence.title");
   const id = useId();
@@ -58,7 +60,7 @@ export function Explain({ item, project }: { item: string; project?: string }) {
         {result.drawings.map(d => <p key={d}><bdi>{d.split(/[\\/]/).pop()}</bdi></p>)}
         <h3>{t("evidence.dimensions")}</h3>
         <ol>{result.dimension_lines.map((line, i) => <li key={i}>
-          <span {...readingDirection(line.label)}>{line.label}</span> · <Formula {...line} />
+          <span {...readingDirection(lineLabel(line, lang))}>{lineLabel(line, lang)}</span> · <Formula {...line} />
           <span> · {t(line.included ? "boq.included" : "boq.excluded")}</span>
           <p>{line.citations.map(c => `${c.source} / ${c.clause}`).join("; ")}</p>
           <TechnicalDetails><pre>{line.expression}{"\n"}{line.decision}</pre></TechnicalDetails>

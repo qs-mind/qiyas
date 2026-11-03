@@ -99,6 +99,7 @@ impl Session {
             notes
                 .push("Manual measurement: no authored recognition or measurement rule is implied");
             lines.push(crate::measurement::DimensionLine {
+                wall_area_basis: None,
                 id: format!("takeoff:{}", i.id),
                 operands: vec![crate::measurement::Operand {
                     label: "Measured".into(),

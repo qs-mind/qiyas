@@ -534,6 +534,7 @@ fn line(
     let mut refs = citations.to_vec();
     refs.push(term.citation.clone());
     Ok(DimensionLine {
+        wall_area_basis: None,
         id: String::new(),
         operands: {
             let mut operands = operands(context, term)?;
@@ -860,6 +861,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     gross - raw,
                 ));
                 lines.push(DimensionLine {
+                    wall_area_basis: None,
                     id: line_id("limited"),
                     operands: vec![],
                     label: LIMITED_LINE.into(),
@@ -890,6 +892,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 let expression = format!("{call}(({raw}) * {scale}) / {scale} - ({raw})");
                 let adjustment = context.number(&expression)?;
                 lines.push(DimensionLine {
+                    wall_area_basis: None,
                     id: line_id("rounding"),
                     operands: vec![Operand {
                         label: format!(
@@ -966,7 +969,54 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     }
                 }
             }
+            let mut wall_area_basis = None;
+            if object.category.eq_ignore_ascii_case("wall") && unit == "m2" {
+                let definition = s.object_type(&object.instance.type_name)?;
+                let joined = matches!(definition.join, crate::objects::JoinRule::Union);
+                let mut net_geometry = false;
+                let mut union_geometry = false;
+                for entry in &mut lines {
+                    let mut names = std::collections::BTreeSet::new();
+                    let mut expressions = entry.source_expressions.clone();
+                    while let Some(expression) = expressions.pop() {
+                        if let Ok(expr) = Expr::parse(&expression) {
+                            for name in expr.names() {
+                                if names.insert(name.clone()) {
+                                    if let Some(value) = definition.quantities.get(&name) {
+                                        expressions.push(value.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let net = names.iter().any(|n| {
+                        matches!(
+                            n.as_str(),
+                            "net_area"
+                                | "geometry.net_area"
+                                | "geometry.internal_face_area"
+                                | "geometry.external_face_area"
+                        )
+                    });
+                    union_geometry |= names
+                        .iter()
+                        .any(|n| matches!(n.as_str(), "gross_area" | "geometry.gross_area"))
+                        || net;
+                    if net && entry.operation == Operation::Add {
+                        entry.wall_area_basis = Some(WallAreaBasis::new(joined));
+                        net_geometry = true;
+                    }
+                }
+                let opening_deductions = deductions.iter().any(|d| {
+                    s.object_type(&d.element_type)
+                        .is_ok_and(|t| t.category.eq_ignore_ascii_case("opening"))
+                });
+                if net_geometry || opening_deductions {
+                    wall_area_basis = Some(WallAreaBasis::new(union_geometry && joined));
+                }
+            }
             report.quantities.push(MeasuredQuantity {
+                wall_area_basis: wall_area_basis.clone(),
                 confidence,
                 object: object.instance.id,
                 rule: rule.id.clone(),
@@ -1025,6 +1075,10 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 base_description_ar: String::new(),
                 second_reading: None,
             };
+            if let Some(basis) = wall_area_basis {
+                item.description_en = format!("{} ({})", item.description_en, basis.label_en);
+                item.description_ar = format!("{} ({})", item.description_ar, basis.label_ar);
+            }
             for kind in ["wall", "door", "window", "room"] {
                 let id = format!("Legacy {kind}");
                 item.description_en = item

@@ -537,7 +537,7 @@ fn u5_narrow_room_names_wrap_inside_and_area_labels_avoid_ink() {
         let label = report.rooms[0].label_handle.unwrap();
         let Outcome::Checked { report } = run(
             &mut s,
-            json!({"type":"check_drawing","scope":{"rules":["text_over_lines","text_overlaps_text"]}}),
+            json!({"type":"check_drawing","scope":{"rules":["text_over_lines","text_over_text"]}}),
         ) else {
             panic!()
         };

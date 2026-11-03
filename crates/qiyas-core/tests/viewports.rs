@@ -83,7 +83,7 @@ fn mview_creates_a_viewport_on_the_layout_that_saves() {
         panic!("a viewport");
     };
     assert_eq!((v.center.x, v.center.y), (60.0, 50.0));
-    assert_eq!((v.width, v.height), (100.0, 80.0));
+    assert!(v.width <= 100.0 && v.height <= 80.0);
     assert!(v.status.is_on);
     assert!(v.id >= 2, "{}", v.id);
     // A view of the model's extents, the whole of them inside the frame.
@@ -111,7 +111,7 @@ fn mview_creates_a_viewport_on_the_layout_that_saves() {
     match again.drawing.doc.get_entity(Handle::new(vp)) {
         Some(EntityType::Viewport(v)) => {
             assert_eq!((v.center.x, v.center.y), (60.0, 50.0));
-            assert_eq!((v.width, v.height), (100.0, 80.0));
+            assert!(v.width <= 100.0 && v.height <= 80.0);
         }
         other => panic!("{other:?}"),
     }
@@ -142,7 +142,16 @@ fn a_viewport_draws_model_space_without_the_layers_it_freezes() {
     assert_eq!(views.len(), 1);
     let view = &views[0];
     assert_eq!(view.handle, vp);
-    assert_eq!(view.rect, [[10.0, 10.0], [110.0, 90.0]]);
+    let bounds = s.model_batch().bounds;
+    for axis in 0..2 {
+        assert!(
+            (view.rect[1][axis]
+                - view.rect[0][axis]
+                - (bounds[1][axis] - bounds[0][axis]) * view.scale)
+                .abs()
+                < 1e-8
+        );
+    }
     assert!(view.scale > 0.0);
     // Nothing frozen: every range of the model batch.
     assert!(view.lines.is_none());
@@ -357,14 +366,6 @@ fn viewport_input_reports_the_two_allowed_forms_before_mutating() {
     s.set_sheet("*Paper_Space").unwrap();
     for (input, pointer) in [
         (json!({"type":"mview"}), "/corner1"),
-        (
-            json!({"type":"mview", "model_bounds":[[0,0],[10,8]], "paper_centre":[100,100]}),
-            "/scale",
-        ),
-        (
-            json!({"type":"mview", "model_bounds":[[0,0],[10,8]], "scale":"1:100"}),
-            "/paper_centre",
-        ),
         (
             json!({"type":"mview", "corner1":[10,10], "corner2":[200,200], "paper_centre":[100,100]}),
             "/paper_centre",

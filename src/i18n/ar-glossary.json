@@ -433,6 +433,24 @@
       "avoid": [],
       "en": "gross"
     },
+    "wall_junction": {
+      "preferred": "التقاء الحوائط",
+      "plural_or_context": "التقاءات الحوائط",
+      "avoid": [],
+      "en": "wall junction"
+    },
+    "net_of_openings": {
+      "preferred": "الصافي بعد خصم الفتحات",
+      "plural_or_context": "الصافي بعد خصم الفتحات",
+      "avoid": [],
+      "en": "Net of openings"
+    },
+    "net_of_openings_and_wall_junctions": {
+      "preferred": "الصافي بعد خصم الفتحات وتداخلات التقاء الحوائط",
+      "plural_or_context": "الصافي بعد خصم الفتحات وتداخلات التقاء الحوائط",
+      "avoid": [],
+      "en": "Net of openings and wall junctions"
+    },
     "net": {
       "preferred": "صافي",
       "plural_or_context": "الكمية الصافية",

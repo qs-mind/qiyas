@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Boundary, Session, Units};
 
 /// Every rule `check_drawing` knows, in the order findings are listed.
-pub const RULES: [&str; 28] = [
+pub const RULES: [&str; 29] = [
     "job_limit",
     "placement",
     "literal_newline",
@@ -41,6 +41,7 @@ pub const RULES: [&str; 28] = [
     "annotation_overlap",
     "annotation_over_grid",
     "label_outside_room",
+    "text_over_text",
     "text_overlaps_text",
     "text_over_lines",
     "text_height_vs_scale",
@@ -759,6 +760,15 @@ impl Session {
             }
         }
         // Only what the scope asks about, errors first.
+        if scope.rules.iter().any(|r| r == "text_overlaps_text")
+            && !scope.rules.iter().any(|r| r == "text_over_text")
+        {
+            for finding in &mut found {
+                if finding.rule == "text_over_text" {
+                    finding.rule = "text_overlaps_text".into();
+                }
+            }
+        }
         found.retain(|f| wanted(&f.rule));
         if !scope.handles.is_empty() {
             found.retain(|f| f.handles.iter().any(|h| scope.handles.contains(h)));
@@ -1536,6 +1546,7 @@ pub fn layout_rule(rule: &str) -> bool {
             | "annotation_overlap"
             | "annotation_over_grid"
             | "label_outside_room"
+            | "text_over_text"
             | "text_overlaps_text"
             | "text_over_lines"
             | "text_height_vs_scale"

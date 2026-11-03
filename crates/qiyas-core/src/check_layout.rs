@@ -232,7 +232,7 @@ impl Session {
                 let rule = if bubble {
                     "annotation_over_grid"
                 } else if a.text.is_some() && b.text.is_some() {
-                    "text_overlaps_text"
+                    "text_over_text"
                 } else if a.text.is_some() {
                     "text_over_lines"
                 } else if a.table || b.table {
@@ -247,7 +247,7 @@ impl Session {
                     at,
                     match rule {
                         "annotation_over_grid" => "Annotation crosses a grid bubble",
-                        "text_overlaps_text" => "Two labels overlap",
+                        "text_over_text" => "Two labels overlap",
                         "text_over_lines" => "Drawing geometry crosses a label",
                         _ => "Annotations overlap",
                     }

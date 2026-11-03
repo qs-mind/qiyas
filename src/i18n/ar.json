@@ -2092,6 +2092,7 @@
   "ai.finding.room_open": "حدود إحدى الغرف مفتوحة.",
   "ai.finding.room_size_text_differs": "تسمية غرفة تختلف عن مقاسها المقاس.",
   "ai.finding.dim_override_mismatch": "نص بعد يختلف عن قياسه.",
+  "ai.finding.text_over_text": "نصوص متداخلة.",
   "ai.finding.text_overlaps_text": "نصوص متداخلة.",
   "ai.finding.text_over_lines": "نص يتقاطع مع خطوط الرسم.",
   "ai.finding.text_height_vs_scale": "حجم النص يحتاج مراجعة بهذا المقياس.",

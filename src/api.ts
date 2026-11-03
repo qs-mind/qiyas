@@ -1574,6 +1574,7 @@ export type NamedSource = { name: string; kind: SourceKind; handle?: number; tex
 /** One named value of a dimension line: Length 5.20 m, its source(s). */
 export type Operand = { label: string; expression: string; value: number; unit?: string; sources: NamedSource[] };
 export type DimensionLine = {
+  wall_area_basis?: { label_en: string; label_ar: string };
   /** Stable across re-derivation: element identity / rule / term or void. Empty in older reports. */
   id?: string;
   operands?: Operand[];

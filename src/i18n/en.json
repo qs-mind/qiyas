@@ -2092,6 +2092,7 @@
   "ai.finding.room_open": "A room boundary is open.",
   "ai.finding.room_size_text_differs": "A room label differs from its measured size.",
   "ai.finding.dim_override_mismatch": "A dimension label differs from its measurement.",
+  "ai.finding.text_over_text": "Text overlaps other text.",
   "ai.finding.text_overlaps_text": "Text overlaps other text.",
   "ai.finding.text_over_lines": "Text crosses drawing lines.",
   "ai.finding.text_height_vs_scale": "Text size needs review at this scale.",

@@ -243,3 +243,6 @@ mod decisions;
 mod generate;
 #[path = "outside_check.rs"]
 mod outside_check;
+
+#[path = "sheet_quality.rs"]
+mod sheet_quality;

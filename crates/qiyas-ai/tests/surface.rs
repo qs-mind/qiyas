@@ -2360,10 +2360,10 @@ async fn new_layout_warnings_are_visible_until_repaired() {
             matches!(events.last(), Some(AgentEvent::Done { .. })),
             "{events:?}"
         );
-        assert_eq!(events.iter().any(|e|matches!(e,AgentEvent::OpenFindings{findings,..} if findings.iter().any(|f|f["rule"]=="text_overlaps_text"))),!repair);
+        assert_eq!(events.iter().any(|e|matches!(e,AgentEvent::OpenFindings{findings,..} if findings.iter().any(|f|f["rule"]=="text_over_text"))),!repair);
         let serialized = serde_json::to_string(agent.history()).unwrap();
         assert!(
-            serialized.contains("text_overlaps_text"),
+            serialized.contains("text_over_text"),
             "The model must see what needs fixing"
         );
         assert!(serialized.contains("layout_findings"));
@@ -3107,7 +3107,7 @@ fn u5_change_reports_all_label_collisions_and_u15_checks_the_edited_sheet() {
     )
     .unwrap();
     assert!(
-        made["check"]["counts"]["text_overlaps_text"]
+        made["check"]["counts"]["text_over_text"]
             .as_u64()
             .unwrap_or(0)
             >= 48,
@@ -3127,7 +3127,7 @@ fn u5_change_reports_all_label_collisions_and_u15_checks_the_edited_sheet() {
     assert_eq!(s.sheet, block);
     assert_eq!(edited["check"]["sheets"], json!(["*Model_Space"]));
     assert!(
-        edited["check"]["counts"]["text_overlaps_text"]
+        edited["check"]["counts"]["text_over_text"]
             .as_u64()
             .unwrap_or(0)
             > 0,

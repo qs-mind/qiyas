@@ -178,7 +178,17 @@ impl Session {
                             Some(&format!("mm/{model_unit}")),
                         );
                     }
-                    if model_bounds.is_some() {
+                    if model_bounds.is_some() && paper_centre.is_none() {
+                        set(
+                            "paper_centre",
+                            json!([
+                                (frame.a[0] + frame.b[0]) / 2.0,
+                                (frame.a[1] + frame.b[1]) / 2.0
+                            ]),
+                            Some("mm"),
+                        );
+                    }
+                    if model_bounds.is_some() || scale.is_none() {
                         set("corner1", json!(frame.a), Some("mm"));
                         set("corner2", json!(frame.b), Some("mm"));
                     }

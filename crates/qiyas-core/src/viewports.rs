@@ -64,6 +64,14 @@ impl ViewportScale {
     }
 }
 
+const FIT_APP: &str = "QIYAS_VIEW_FIT";
+#[derive(Serialize, Deserialize)]
+struct AutoFit {
+    bounds: crate::ink::Bounds,
+    scale: f64,
+    automatic: bool,
+}
+
 /// One viewport of the layout on screen, as the window draws model space inside it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PaperView {
@@ -146,6 +154,201 @@ fn frozen_names(doc: &CadDocument, v: &Viewport) -> HashSet<String> {
 }
 
 impl Session {
+    pub(crate) fn remember_viewport_fit(
+        &mut self,
+        handle: u64,
+        bounds: crate::ink::Bounds,
+        automatic: bool,
+    ) -> Result<(), CoreError> {
+        let app = crate::xdata::register(&mut self.drawing.doc, FIT_APP);
+        let Some(EntityType::Viewport(v)) = self.drawing.doc.get_entity_mut(Handle::new(handle))
+        else {
+            return Ok(());
+        };
+        let value = AutoFit {
+            bounds,
+            scale: v.scale(),
+            automatic,
+        };
+        crate::xdata::write_json(&mut v.common, FIT_APP, app, &value)
+    }
+
+    pub(crate) fn refit_arranged_viewports(&mut self, sheet: &str) -> Result<(), CoreError> {
+        let views: Vec<_> = self
+            .drawing
+            .doc
+            .entities_in_block(sheet)
+            .filter_map(|e| {
+                let EntityType::Viewport(v) = e else {
+                    return None;
+                };
+                (v.id > 1 && v.status.is_on).then_some((
+                    v.common.handle.value(),
+                    crate::xdata::read_json::<AutoFit>(&v.common, FIT_APP),
+                    v.scale(),
+                ))
+            })
+            .collect();
+        if views.iter().all(|(_, fit, _)| fit.is_none()) {
+            return Ok(());
+        }
+        let usable = self.viewport_usable_area(sheet)?;
+        let columns = (views.len() as f64).sqrt().ceil() as usize;
+        let rows = views.len().div_ceil(columns);
+        let cell = [
+            (usable[1][0] - usable[0][0]) / columns as f64,
+            (usable[1][1] - usable[0][1]) / rows as f64,
+        ];
+        for (index, (h, fit, current_scale)) in views.iter().enumerate() {
+            let Some(fit) = fit else {
+                continue;
+            };
+            if !fit.automatic || (fit.scale - current_scale).abs() > fit.scale.abs() * 1e-9 {
+                self.advise_viewport_fill(fit.bounds, *current_scale, usable);
+                continue;
+            }
+            if self.is_locked(Handle::new(*h)) {
+                continue;
+            }
+            let lo = [
+                usable[0][0] + (index % columns) as f64 * cell[0],
+                usable[0][1] + (index / columns) as f64 * cell[1],
+            ];
+            let area = [lo, [lo[0] + cell[0], lo[1] + cell[1]]];
+            let mm = self.drawing.units.to_metres() * 1000.0;
+            let model = [
+                (fit.bounds[1][0] - fit.bounds[0][0]).abs(),
+                (fit.bounds[1][1] - fit.bounds[0][1]).abs(),
+            ];
+            let Some(den) = crate::sheet_setup::fitting_denominator(
+                model.map(|v| v * mm),
+                [
+                    area[1][0] - area[0][0] - 10.0,
+                    area[1][1] - area[0][1] - 10.0,
+                ],
+            ) else {
+                continue;
+            };
+            let scale = mm / den;
+            let centre = [
+                (area[0][0] + area[1][0]) / 2.0,
+                (area[0][1] + area[1][1]) / 2.0,
+            ];
+            let frame = ViewportFrame {
+                a: [
+                    centre[0] - model[0] * scale / 2.0,
+                    centre[1] - model[1] * scale / 2.0,
+                ],
+                b: [
+                    centre[0] + model[0] * scale / 2.0,
+                    centre[1] + model[1] * scale / 2.0,
+                ],
+                centre: [
+                    (fit.bounds[0][0] + fit.bounds[1][0]) / 2.0,
+                    (fit.bounds[0][1] + fit.bounds[1][1]) / 2.0,
+                ],
+                scale,
+            };
+            self.resize_viewport(
+                &Target {
+                    handle: *h,
+                    chain: vec![],
+                },
+                frame,
+            )?;
+            self.remember_viewport_fit(*h, fit.bounds, true)?;
+        }
+        Ok(())
+    }
+
+    /// The drawing field inside the title frame and its reserved strips.
+    pub(crate) fn viewport_usable_area(
+        &self,
+        sheet: &str,
+    ) -> Result<crate::ink::Bounds, CoreError> {
+        if let Some(zones) = self.sheet_zones(sheet) {
+            return Ok(zones.plans);
+        }
+        let owner = self.drawing.doc.block_records.get(sheet).map(|b| b.handle);
+        self.drawing
+            .doc
+            .objects
+            .values()
+            .find_map(|o| {
+                let opencadcodec::objects::ObjectType::Layout(l) = o else {
+                    return None;
+                };
+                if Some(l.block_record) != owner {
+                    return None;
+                }
+                let (mut w, mut h) = (l.paper_width, l.paper_height);
+                if matches!(l.plot_rotation, 1 | 3) {
+                    std::mem::swap(&mut w, &mut h);
+                }
+                if w <= 0.0 || h <= 0.0 {
+                    return None;
+                }
+                let mut area = crate::sheet_setup::zones_of(w, h, &[]).plans;
+                for entity in self.drawing.doc.entities_in_block(sheet).filter(|e| {
+                    e.common().layer.eq_ignore_ascii_case("A-ANNO-TTLB")
+                        && matches!(e, EntityType::LwPolyline(p) if p.is_closed)
+                }) {
+                    let frame = crate::ink::union(
+                        qiyas_geom::flatten(
+                            &self.drawing.doc,
+                            entity,
+                            &qiyas_geom::Xform::identity(),
+                            0.01,
+                        )
+                        .into_paths()
+                        .iter()
+                        .filter_map(|p| p.bounds()),
+                    );
+                    if let Some(frame) =
+                        frame.filter(|b| b[1][0] - b[0][0] > w * 0.8 && b[1][1] - b[0][1] > h * 0.8)
+                    {
+                        for i in 0..2 {
+                            area[0][i] = area[0][i].max(frame[0][i]);
+                            area[1][i] = area[1][i].min(frame[1][i]);
+                        }
+                    }
+                }
+                Some(area)
+            })
+            .ok_or_else(|| {
+                invalid("Size the layout with set_layout_paper before fitting a viewport")
+            })
+    }
+
+    pub(crate) fn advise_viewport_fill(
+        &mut self,
+        bounds: crate::ink::Bounds,
+        scale: f64,
+        area: crate::ink::Bounds,
+    ) {
+        let model = [
+            (bounds[1][0] - bounds[0][0]).abs(),
+            (bounds[1][1] - bounds[0][1]).abs(),
+        ];
+        let paper = [
+            area[1][0] - area[0][0] - 10.0,
+            area[1][1] - area[0][1] - 10.0,
+        ];
+        let mm = self.drawing.units.to_metres() * 1000.0;
+        let Some(den) = crate::sheet_setup::fitting_denominator(model.map(|v| v * mm), paper)
+        else {
+            return;
+        };
+        let fill = model[0] * model[1] * scale * scale / (paper[0] * paper[1]);
+        if fill < 0.4 && mm / den > scale * (1.0 + 1e-9) {
+            self.last_advice.push(serde_json::json!({
+                "code":"viewport_underfilled", "fill_fraction":fill, "suggested_scale":format!("1:{den}"),
+                "message":format!("The drawing fills {:.0}% of the usable sheet area; 1:{den} would fit. The explicit scale was retained.", fill * 100.0),
+                "message_ar":format!("يشغل الرسم {:.0}% من المساحة المتاحة باللوحة؛ يتسع مقياس 1:{den}. تم الاحتفاظ بالمقياس المحدد.", fill * 100.0)
+            }));
+        }
+    }
+
     /// Fits the model bounds in a paper rectangle without adding a viewport.
     pub(crate) fn viewport_fit_default(
         &self,
@@ -177,10 +380,16 @@ impl Session {
                     f64::INFINITY
                 }
             };
-            (
-                [(x0 + x1) / 2.0, (y0 + y1) / 2.0],
-                fit(w, ew).min(fit(h, eh)),
-            )
+            ([(x0 + x1) / 2.0, (y0 + y1) / 2.0], {
+                let max_scale = fit(w, ew).min(fit(h, eh));
+                let mm = self.drawing.units.to_metres() * 1000.0;
+                let den = crate::sheet_setup::fitting_denominator(
+                    [ew.max(1e-9) * mm, eh.max(1e-9) * mm],
+                    [w, h],
+                )
+                .ok_or_else(|| invalid("The model cannot fit this viewport"))?;
+                (mm / den).min(max_scale)
+            })
         })
     }
 
@@ -210,13 +419,32 @@ impl Session {
             if a != [0.0, 0.0] || b != [0.0, 0.0] || centre.is_some() {
                 return Err(invalid("Use model_bounds with scale and paper_centre, or corner1/corner2 with centre; do not combine the two forms"));
             }
-            let Some(paper_centre) = paper_centre else {
-                return Err(invalid(
-                    "model_bounds needs paper_centre: [x, y] in paper millimetres",
-                ));
+            let area = if given_scale.is_none() || paper_centre.is_none() {
+                self.viewport_usable_area(&self.sheet)?
+            } else {
+                [[0.0, 0.0], [0.0, 0.0]]
             };
-            let Some(scale) = given_scale else {
-                return Err(invalid("model_bounds needs scale, for example \"1:100\""));
+            let paper_centre = paper_centre.unwrap_or([
+                (area[0][0] + area[1][0]) / 2.0,
+                (area[0][1] + area[1][1]) / 2.0,
+            ]);
+            let scale = if let Some(scale) = given_scale {
+                scale
+            } else {
+                let mm = self.drawing.units.to_metres() * 1000.0;
+                let available = [
+                    2.0 * (paper_centre[0] - area[0][0]).min(area[1][0] - paper_centre[0]) - 10.0,
+                    2.0 * (paper_centre[1] - area[0][1]).min(area[1][1] - paper_centre[1]) - 10.0,
+                ];
+                let den = crate::sheet_setup::fitting_denominator(
+                    [
+                        (bounds[1][0] - bounds[0][0]).abs() * mm,
+                        (bounds[1][1] - bounds[0][1]).abs() * mm,
+                    ],
+                    available,
+                )
+                .ok_or_else(|| invalid("The model window cannot fit inside the sheet margins"))?;
+                mm / den
             };
             if !bounds
                 .iter()
@@ -250,7 +478,35 @@ impl Session {
                 "paper_centre needs model_bounds; explicit frames use corner1 and corner2",
             ));
         }
+        let (mut a, mut b) = (
+            [a[0].min(b[0]), a[1].min(b[1])],
+            [a[0].max(b[0]), a[1].max(b[1])],
+        );
+        if given_scale.is_none() {
+            if let Ok(area) = self.viewport_usable_area(&self.sheet) {
+                let lo = [a[0].max(area[0][0] + 5.0), a[1].max(area[0][1] + 5.0)];
+                let hi = [b[0].min(area[1][0] - 5.0), b[1].min(area[1][1] - 5.0)];
+                if (0..2).all(|i| hi[i] > lo[i]) {
+                    a = lo;
+                    b = hi;
+                } else {
+                    a = area[0].map(|v| v + 5.0);
+                    b = area[1].map(|v| v - 5.0);
+                }
+            }
+        }
         let (fit_centre, fit_scale) = self.viewport_fit_default(a, b)?;
+        if given_scale.is_none() && centre.is_none() {
+            let bounds = self.with_model(None, |m| m.bounds);
+            let middle = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            for i in 0..2 {
+                let size = (bounds[1][i] - bounds[0][i]) * fit_scale;
+                if size > 0.0 {
+                    a[i] = middle[i] - size / 2.0;
+                    b[i] = middle[i] + size / 2.0;
+                }
+            }
+        }
         Ok(ViewportFrame {
             a,
             b,

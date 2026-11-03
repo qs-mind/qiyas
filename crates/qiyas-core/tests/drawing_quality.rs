@@ -243,7 +243,7 @@ fn checks_inspect_text_after_the_former_two_thousand_limit() {
         json!({"type":"text","at":[10005,0],"height":0.1,"value":"Collision"}),
     );
     let report = s.check_drawing(&CheckScope {
-        rules: vec!["text_overlaps_text".into()],
+        rules: vec!["text_over_text".into()],
         ..Default::default()
     });
     assert!(report.complete);
@@ -366,7 +366,7 @@ fn text_inside_symbols_tables_and_hatches_is_checked() {
         t.block_name.clear();
         t.block_record_handle = None;
     }
-    assert!(has(&s, "text_over_lines", table) || has(&s, "text_overlaps_text", table));
+    assert!(has(&s, "text_over_lines", table) || has(&s, "text_over_text", table));
     let outline = add(
         &mut s,
         json!({"type":"draw","kind":"rectangle","a":[10,0],"b":[12,2]}),
@@ -520,7 +520,7 @@ fn opening_symbols_number_in_requested_order_and_share_schedule_marks() {
             1
         );
         for h in &handles {
-            assert!(!has(&s, "text_overlaps_text", *h));
+            assert!(!has(&s, "text_over_text", *h));
             assert!(!has(&s, "text_over_lines", *h));
         }
         assert!(s.undo());

@@ -3854,6 +3854,15 @@ What a client gets from Qiyas and Mizan: the notes, the root cause of each and t
   review, sheet) in the sheet's language, general notes at 3 mm and a scale bar. Titles are 4 mm; nothing
   is under 2.5 mm. Fields nobody gave stay empty and are listed. `plot` with no sheet prints the
   layout. The layout's own viewport (number 1) no longer makes a sheet "incomplete" for `free_space`.
+  `mview` also chooses the largest standard architectural scale when scale is omitted, sizes
+  its frame to the model window, and defaults `paper_centre` to the usable plan field.
+  Explicit scales remain unchanged; below 40% sheet occupancy, bilingual advice names a larger
+  fitting scale. `arrange` refits viewports created with automatic scale; explicit edits retain scale.
+  `make_sheet` and `arrange` separate overlapping loose text using rendered bounds, keep leader
+  arrowheads anchored, and report unresolved overlaps. Repairs share the command's undo step.
+  Drawing check `text_over_text` reports both handles; `text_overlaps_text` remains an input alias.
+  Wall-area measurement reports and exports distinguish “Net of openings” from “Net of openings
+  and wall junctions”, with the corresponding terms in `src/i18n/ar-glossary.json`.
   A schedule added to a layout without `at` goes inside the frame, clear of the viewports and the title block
   (`place_new_table`); `free_space` treats a viewport's frame as occupied.
 - Language: the agent sets `Session::set_sheet_language` from the user's latest message each turn;

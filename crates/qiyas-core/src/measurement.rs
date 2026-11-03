@@ -319,8 +319,35 @@ pub struct Operand {
     pub unit: String,
     pub sources: Vec<NamedSource>,
 }
+/// What was removed from a reported wall area, in the glossary's two languages.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WallAreaBasis {
+    pub label_en: String,
+    pub label_ar: String,
+}
+impl WallAreaBasis {
+    pub fn new(junctions: bool) -> Self {
+        Self {
+            label_en: if junctions {
+                "Net of openings and wall junctions"
+            } else {
+                "Net of openings"
+            }
+            .into(),
+            label_ar: if junctions {
+                "الصافي بعد خصم الفتحات وتداخلات التقاء الحوائط"
+            } else {
+                "الصافي بعد خصم الفتحات"
+            }
+            .into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DimensionLine {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_area_basis: Option<WallAreaBasis>,
     /// Stable across re-derivation: element identity, rule and term (or void).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
@@ -344,6 +371,8 @@ pub struct DimensionLine {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeasuredQuantity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_area_basis: Option<WallAreaBasis>,
     #[serde(default = "crate::trust::unscored")]
     pub confidence: f64,
     pub object: u64,
@@ -396,6 +425,23 @@ pub struct GeneratedItem {
 }
 /// The dimension line that says a deduction was limited to the gross quantity.
 pub(crate) const LIMITED_LINE: &str = "Deductions limited to the gross quantity";
+
+impl DimensionLine {
+    pub fn display_label(&self, arabic: bool) -> String {
+        match &self.wall_area_basis {
+            Some(basis) => format!(
+                "{} ({})",
+                self.label,
+                if arabic {
+                    &basis.label_ar
+                } else {
+                    &basis.label_en
+                }
+            ),
+            None => self.label.clone(),
+        }
+    }
+}
 
 impl GeneratedItem {
     /// The mapping's own code: the one a client BOQ row is matched by.

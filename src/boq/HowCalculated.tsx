@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DimensionLine, Explanation, Operand } from "../api";
 import { useLanguage, useT } from "../i18n";
 import { TechnicalDetails } from "../shell/TechnicalDetails";
-import { elementName, itemTitle, lineOperands, linesOf, num, operandText, unitText } from "./calculated";
+import { elementName, itemTitle, lineLabel, lineOperands, linesOf, num, operandText, unitText } from "./calculated";
 
 export type HowCalculatedProps = {
   explanation: Explanation;
@@ -89,6 +89,8 @@ export function HowCalculated({ explanation, line, focus, onFocus, onShowSource,
 
 function Line({ line, marked, onShowSource }: { line: DimensionLine; marked: boolean; onShowSource(handle: number): void }) {
   const t = useT();
+  const { lang } = useLanguage();
+  const label = lineLabel(line, lang);
   const ref = useRef<HTMLLIElement>(null);
   const [open, setOpen] = useState<number | null>(null);
   useEffect(() => {
@@ -99,9 +101,9 @@ function Line({ line, marked, onShowSource }: { line: DimensionLine; marked: boo
   const deduct = line.operation === "deduct";
   return (
     <li ref={ref} className={`trace-line${marked ? " trace-line-marked" : ""}${line.included ? "" : " trace-line-excluded"}`}>
-      <p className="trace-label" {...readingDirection(`${deduct ? t("trace.deduct") : ""} ${line.label} ${!line.included ? t("boq.excluded") : ""}`)}>
+      <p className="trace-label" {...readingDirection(`${deduct ? t("trace.deduct") : ""} ${label} ${!line.included ? t("boq.excluded") : ""}`)}>
         {deduct ? `${t("trace.deduct")}: ` : ""}
-        {line.label}
+        {label}
         {!line.included && <span className="trace-muted"> · {t("boq.excluded")}</span>}
       </p>
       <p className="trace-equation" dir="ltr">

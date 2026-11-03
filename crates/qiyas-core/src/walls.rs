@@ -195,6 +195,7 @@ pub struct WallResult {
     pub centreline_length: f64,
     pub gross_area: f64,
     pub net_area: f64,
+    pub net_area_basis: crate::measurement::WallAreaBasis,
     /// Gross area times height less the opening voids; sill walls and lintels remain.
     pub volume: f64,
     /// Every replaced handle and its replacements; an empty list means removed.
@@ -310,6 +311,7 @@ impl Session {
             })
             .collect();
         let mut result = WallResult {
+            net_area_basis: crate::measurement::WallAreaBasis::new(true),
             defaults_used,
             group: 0,
             handles: Vec::new(),
@@ -1711,6 +1713,7 @@ impl Session {
             }
         }
         Ok(WallResult {
+            net_area_basis: crate::measurement::WallAreaBasis::new(true),
             defaults_used,
             group: group.id,
             handles: group.members.iter().map(|(h, _, _)| *h).collect(),

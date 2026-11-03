@@ -104,6 +104,222 @@ fn merge(a: &mut Part, b: Part) {
 }
 
 impl Session {
+    /// Separate loose annotation text using rendered bounds, with a bounded local search.
+    pub(crate) fn declutter_annotations(
+        &mut self,
+        sheet: &str,
+        selected: Option<&BTreeSet<u64>>,
+        within: Option<Bounds>,
+    ) -> Result<Vec<Move>, CoreError> {
+        let ink = self.sheet_ink(sheet);
+        let mut boxes = BTreeMap::<u64, Bounds>::new();
+        for p in ink.pieces.iter().filter(|p| p.text.is_some()) {
+            boxes
+                .entry(p.owner)
+                .and_modify(|b| *b = ink::union([*b, p.bounds].into_iter()).unwrap())
+                .or_insert(p.bounds);
+        }
+        use rstar::primitives::{GeomWithData, Rectangle};
+        let entry = |h, b: Bounds| GeomWithData::new(Rectangle::from_corners(b[0], b[1]), h);
+        let mut text_index =
+            rstar::RTree::bulk_load(boxes.iter().map(|(&h, &b)| entry(h, b)).collect());
+        let editable = |h: u64| {
+            self.drawing
+                .doc
+                .get_entity(Handle::new(h))
+                .is_some_and(|e| {
+                    matches!(e, EntityType::Text(_) | EntityType::MText(_))
+                        && !self.is_locked(Handle::new(h))
+                        && !e.common().layer.eq_ignore_ascii_case("A-ANNO-TTLB")
+                        && !self
+                            .drawing
+                            .doc
+                            .layers
+                            .get(&e.common().layer)
+                            .is_some_and(|l| l.flags.locked)
+                        && crate::xdata::read_json::<crate::objects::ObjectPart>(
+                            e.common(),
+                            crate::objects::PART_APP,
+                        )
+                        .is_none()
+                        && (self
+                            .room_from_label(&Target {
+                                handle: h,
+                                chain: vec![],
+                            })
+                            .is_err()
+                            || self.room_label_has_leader(h))
+                })
+        };
+        let candidates: Vec<_> = boxes
+            .keys()
+            .copied()
+            .filter(|h| {
+                selected.is_none_or(|ids| ids.contains(h))
+                    && within.is_none_or(|b| contains(b, boxes[h]))
+                    && editable(*h)
+            })
+            .collect();
+        let paper = !sheet.eq_ignore_ascii_case("*Model_Space");
+        let zones = self.sheet_zones(sheet);
+        let paper_area = if paper {
+            self.viewport_usable_area(sheet).ok()
+        } else {
+            None
+        };
+        let mut moves = Vec::new();
+        for h in candidates {
+            let old = boxes[&h];
+            let area = within
+                .or_else(|| {
+                    zones.as_ref().and_then(|z| {
+                        [z.plans, z.notes, z.schedules]
+                            .into_iter()
+                            .find(|b| contains(*b, old))
+                    })
+                })
+                .or(paper_area);
+            if !text_index
+                .locate_in_envelope_intersecting(&rstar::AABB::from_corners(old[0], old[1]))
+                .any(|p| p.data != h && overlaps(old, boxes[&p.data]))
+            {
+                continue;
+            }
+            let leaders: Vec<_> = self
+                .drawing
+                .doc
+                .entities_in_block(sheet)
+                .filter_map(|e| {
+                    matches!(e, EntityType::Leader(l) if l.annotation_handle.value() == h)
+                        .then_some(e.common().handle.value())
+                })
+                .collect();
+            if leaders.iter().any(|id| {
+                self.drawing
+                    .doc
+                    .get_entity(Handle::new(*id))
+                    .is_some_and(|e| {
+                        self.drawing
+                            .doc
+                            .layers
+                            .get(&e.common().layer)
+                            .is_some_and(|l| l.flags.locked)
+                    })
+            }) {
+                continue;
+            }
+            let height = ink
+                .pieces
+                .iter()
+                .filter(|p| p.owner == h)
+                .map(|p| p.height)
+                .fold(0.0_f64, f64::max)
+                .max(1e-6);
+            let gap = height * 0.4;
+            let mut best: Option<(usize, f64, [f64; 2], Bounds)> = None;
+            for ring in 1..=24 {
+                for direction in [
+                    [0.0, 1.0],
+                    [0.0, -1.0],
+                    [1.0, 0.0],
+                    [-1.0, 0.0],
+                    [1.0, 1.0],
+                    [-1.0, 1.0],
+                    [1.0, -1.0],
+                    [-1.0, -1.0],
+                ] {
+                    let delta = direction.map(|v| v * f64::from(ring) * height * 0.75);
+                    let b = [
+                        [old[0][0] + delta[0], old[0][1] + delta[1]],
+                        [old[1][0] + delta[0], old[1][1] + delta[1]],
+                    ];
+                    if area.is_some_and(|a| !contains(a, b)) || {
+                        let expanded = ink::expand(b, gap);
+                        text_index
+                            .locate_in_envelope_intersecting(&rstar::AABB::from_corners(
+                                expanded[0],
+                                expanded[1],
+                            ))
+                            .any(|p| p.data != h && overlaps(expanded, boxes[&p.data]))
+                    } {
+                        continue;
+                    }
+                    let crowding = ink
+                        .near(ink::expand(b, gap))
+                        .filter(|p| {
+                            p.owner != h
+                                && !leaders.contains(&p.owner)
+                                && p.text.is_none()
+                                && !p.filled
+                        })
+                        .count();
+                    let distance = delta[0].hypot(delta[1]);
+                    if best
+                        .as_ref()
+                        .is_none_or(|(crowd, dist, _, _)| (crowding, distance) < (*crowd, *dist))
+                    {
+                        best = Some((crowding, distance, delta, b));
+                    }
+                }
+                if best.as_ref().is_some_and(|(crowd, _, _, _)| *crowd == 0) {
+                    break;
+                }
+            }
+            let Some((_, _, delta, b)) = best else {
+                continue;
+            };
+            self.modify(ModifySpec::Move {
+                targets: vec![Target {
+                    handle: h,
+                    chain: vec![],
+                }],
+                delta,
+            })?;
+            for id in &leaders {
+                if let Some(EntityType::Leader(l)) =
+                    self.drawing.doc.get_entity_mut(Handle::new(*id))
+                {
+                    if l.vertices.len() >= 2 {
+                        if let Some(end) = l.vertices.last_mut() {
+                            end.x += delta[0];
+                            end.y += delta[1];
+                        }
+                    }
+                }
+            }
+            text_index.remove(&entry(h, old));
+            text_index.insert(entry(h, b));
+            boxes.insert(h, b);
+            moves.push(Move {
+                handles: std::iter::once(h).chain(leaders).collect(),
+                label: "Annotation".into(),
+                from: old[0],
+                to: b[0],
+            });
+        }
+        let mut remaining = BTreeSet::new();
+        for (&h, b) in &boxes {
+            if selected.is_some_and(|ids| !ids.contains(&h))
+                || within.is_some_and(|area| !contains(area, *b))
+            {
+                continue;
+            }
+            for p in
+                text_index.locate_in_envelope_intersecting(&rstar::AABB::from_corners(b[0], b[1]))
+            {
+                if h != p.data && overlaps(*b, boxes[&p.data]) {
+                    remaining.extend([h, p.data]);
+                }
+            }
+        }
+        if !remaining.is_empty() {
+            self.last_advice.push(serde_json::json!({"code":"text_over_text","handles":remaining.into_iter().take(100).collect::<Vec<_>>(),
+                "message":"Some texts still overlap; locked or generated annotations and notes without enough nearby space were left for review.",
+                "message_ar":"ما زالت بعض النصوص متداخلة؛ تركت التعليقات المقفلة أو المولدة والملاحظات التي لا تتسع المساحة المجاورة لها للمراجعة."}));
+        }
+        Ok(moves)
+    }
+
     /// Ink uses the real rendered text bounds; viewport interiors count as occupied too.
     pub(crate) fn drawing_parts(&self, sheet: &str, ink: &SheetInk, tolerance: f64) -> Vec<Part> {
         let mut bounds = BTreeMap::<u64, Bounds>::new();
@@ -334,6 +550,12 @@ impl Session {
         let gap = mm * 0.001 * scale / to_m;
         if !gap.is_finite() {
             return Err(invalid("The paper gap is too large for this scale"));
+        }
+        if spec.items.is_none() && !sheet.eq_ignore_ascii_case("*Model_Space") {
+            let previous = std::mem::replace(&mut self.sheet, sheet.clone());
+            let fitted = self.refit_arranged_viewports(&sheet);
+            self.sheet = previous;
+            fitted?;
         }
         let ink = self.sheet_ink(&sheet);
         let automatic = self.drawing_parts(&sheet, &ink, gap / 2.0);
@@ -619,9 +841,28 @@ impl Session {
                     to,
                 });
             }
+            let selected = parts
+                .iter()
+                .flat_map(|p| p.handles.iter().copied())
+                .collect();
+            moves.extend(self.declutter_annotations(&sheet, Some(&selected), None)?);
             // Report all remaining collisions, including untouched content in a subset arrange.
             let final_ink = self.sheet_ink(&sheet);
             let final_parts = self.drawing_parts(&sheet, &final_ink, gap / 2.0);
+            let report = self.check_drawing(&crate::CheckScope {
+                sheet: Some(sheet.clone()),
+                rules: vec!["text_over_text".into()],
+                ..Default::default()
+            });
+            for finding in report.findings {
+                issues.push(ArrangementIssue {
+                    handles: finding.handles,
+                    code: finding.rule,
+                    message: finding.message,
+                    message_ar: "تعذر فصل بعض النصوص ضمن المساحة المتاحة؛ راجع النصوص المحددة"
+                        .into(),
+                });
+            }
             for (i, a) in final_parts.iter().enumerate().filter(|(_, p)| !p.frame) {
                 for b in final_parts.iter().skip(i + 1).filter(|p| !p.frame) {
                     if overlaps(a.bounds, b.bounds) {
@@ -634,12 +875,7 @@ impl Session {
                     }
                 }
             }
-            let extents = ink::union(
-                placed
-                    .into_iter()
-                    .chain(obstacles.iter().copied())
-                    .chain(fixed.iter().filter(|p| p.frame).map(|p| p.bounds)),
-            );
+            let extents = ink::union(final_parts.iter().map(|p| p.bounds));
             Ok(Arrangement {
                 sheet,
                 moves,

@@ -1,6 +1,11 @@
 /** Pure helpers for "How was it calculated": numbers, units and names as an engineer reads them. */
 import type { DimensionLine, Explanation, Operand } from "../api";
 
+export function lineLabel(line: DimensionLine, lang: "en" | "ar"): string {
+  const basis = line.wall_area_basis?.[lang === "ar" ? "label_ar" : "label_en"];
+  return basis ? `${line.label} (${basis})` : line.label;
+}
+
 /** Units as written on a dimension sheet: m², m³. */
 export function unitText(unit: string | undefined): string {
   if (!unit) return "";

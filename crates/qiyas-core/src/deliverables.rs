@@ -724,7 +724,7 @@ fn drop_foreign_columns(
 
 fn localized(rows: &mut [Value], language: Language) {
     for row in rows {
-        for name in ["description", "reason"] {
+        for name in ["description", "reason", "label"] {
             let key = format!(
                 "{name}_{}",
                 if language == Language::Ar { "ar" } else { "en" }
@@ -769,6 +769,8 @@ fn item_rows(items: &[crate::measurement::GeneratedItem], kind: Kind, drawing: &
         .flat_map(|item| {
             printed_lines(item).into_iter().map(move |line| {
                 let mut row = json!(line);
+                row["label_en"] = json!(line.display_label(false));
+                row["label_ar"] = json!(line.display_label(true));
                 row["target"] = json!(TraceTarget {
                     item: format!("generated:{}", item.code),
                     line: (!line.id.is_empty()).then(|| line.id.clone()),

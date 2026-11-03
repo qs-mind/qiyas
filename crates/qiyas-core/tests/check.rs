@@ -354,7 +354,7 @@ fn text_faults_are_found() {
     };
     assert!(found("text_height_vs_scale", tiny), "{:?}", rules(&r));
     assert!(
-        found("text_overlaps_text", a) && found("text_overlaps_text", b),
+        found("text_over_text", a) && found("text_over_text", b),
         "{:?}",
         rules(&r)
     );

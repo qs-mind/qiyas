@@ -61,6 +61,7 @@ fn drawing_kit_is_upfront_under_budget_with_complete_valid_examples() {
         "modify.array_rect",
         "modify.array_polar",
         "make_sheet",
+        "mview",
         "title_block",
         "set_property",
         "records",

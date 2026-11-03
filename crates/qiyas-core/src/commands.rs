@@ -1256,7 +1256,8 @@ pub enum Command {
     /// whole in one undo step; omitted items are grouped automatically. Paper layouts keep
     /// their margins, sheet frame and title block clear. Generated sheets retain zones:
     /// notes beside the title block, schedules along the opposite edge, plans in the main field.
-    /// Reports remaining overlaps and zone overflow without shrinking content.
+    /// Refits automatic viewports and nudges overlapping loose text, preserving leader anchors.
+    /// Reports remaining overlaps and zone overflow without shrinking annotations.
     /// تحفظ اللوحات مناطق الملاحظات بجوار بيانات اللوحة والجداول على الحافة المقابلة
     /// والمساقط في الحقل الرئيسي؛ تذكر التداخلات والمحتويات التي لا تتسع دون تصغيرها.
     /// Read back the layout and check overlap after arranging; use auto_place for individual
@@ -1295,9 +1296,10 @@ pub enum Command {
         layer: String,
     },
     /// A paper-space viewport on the layout on screen with corners in paper millimetres.
-    /// Without scale it fits model extents. A ratio such as "1:100" is a physical paper scale;
-    /// a number is paper millimetres per model unit. `centre` is a model point.
-    /// Alternatively supply model_bounds, scale and paper_centre to compute the frame.
+    /// Without scale it fits model extents at the largest standard architectural scale.
+    /// A ratio such as "1:100" is physical; a number is paper millimetres per model unit.
+    /// `centre` is a model point.
+    /// Alternatively supply model_bounds; scale and paper_centre default to the usable sheet area.
     /// Supply target to resize an existing viewport in place. One undo step; missing A-VIEW
     /// is created non-plotting when the current layer is 0. `Outcome::Added` or `Changed`.
     #[serde(rename = "mview")]
@@ -1316,7 +1318,7 @@ pub enum Command {
         scale: Option<crate::ViewportScale>,
         #[serde(default)]
         centre: Option<[f64; 2]>,
-        /// Model window in drawing units; requires scale and paper_centre instead of corners.
+        /// Model window in drawing units; optional scale and paper_centre replace corners.
         #[serde(default)]
         model_bounds: Option<[[f64; 2]; 2]>,
         /// Frame centre in paper millimetres for model_bounds.
@@ -1752,7 +1754,7 @@ impl Command {
                 crate::decisions::DecisionCommand::Set { .. } => Some(Part::Document { tables: true, takeoff: true }),
             },
             Command::OutsideCheck(_) => None,
-            Command::Arrange(_) => Some(Part::Document { tables: true, takeoff: true }),
+            Command::Arrange(_) | Command::MakeSheet(_) => Some(Part::Document { tables: true, takeoff: true }),
             Command::Project(command) => if command.is_read() {None} else {Some(Part::ProjectFile)},
             Command::Deliverable(_) | Command::CompareRevisions { .. } => None,
             Command::CarryKnowledge { .. } | Command::VariationReport { .. } => Some(Part::Document { tables: true, takeoff: false }),
@@ -1860,7 +1862,6 @@ impl Command {
             | Command::SetLayoutPaper { .. }
             | Command::RenameLayout { .. }
             | Command::TitleBlock { .. }
-            | Command::MakeSheet(_)
             | Command::MView { .. }
             | Command::RedefineBlock { .. }
             // The layers, linetypes, styles and blocks the pasted entities bring.
@@ -3318,11 +3319,27 @@ impl Session {
                     model_bounds,
                     paper_centre,
                 )?;
+                if scale.is_some() {
+                    let bounds =
+                        model_bounds.unwrap_or_else(|| self.with_model(None, |m| m.bounds));
+                    if let Ok(area) = self.viewport_usable_area(&self.sheet) {
+                        self.advise_viewport_fill(bounds, frame.scale, area);
+                    }
+                }
                 if let Some(target) = target {
                     self.resize_viewport(&target, frame)?;
+                    let bounds =
+                        model_bounds.unwrap_or_else(|| self.with_model(None, |m| m.bounds));
+                    self.remember_viewport_fit(
+                        target.handle,
+                        bounds,
+                        scale.is_none() && centre.is_none(),
+                    )?;
                     return Ok(Outcome::Changed);
                 }
                 let h = self.mview(frame)?;
+                let bounds = model_bounds.unwrap_or_else(|| self.with_model(None, |m| m.bounds));
+                self.remember_viewport_fit(h, bounds, scale.is_none() && centre.is_none())?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }
             Command::CopyToClipboard { targets, base } => {

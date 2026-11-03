@@ -551,18 +551,11 @@ fn validate_at(
         let fitted = canonical
             .get("model_bounds")
             .is_some_and(|value| !value.is_null());
-        let required = if fitted {
-            ["scale", "paper_centre"]
-        } else {
-            ["corner1", "corner2"]
-        };
-        for field in required {
+        let required: &[&str] = if fitted { &[] } else { &["corner1", "corner2"] };
+        for &field in required {
             if canonical.get(field).is_none_or(Value::is_null) {
-                report.error("missing_field", &pointer(path, field), if fitted {
-                    "model_bounds requires scale (for example \"1:100\") and paper_centre: [x, y] in paper millimetres"
-                } else {
-                    "Give corner1 and corner2 as [x, y] in paper millimetres, or model_bounds with scale and paper_centre"
-                });
+                report.error("missing_field", &pointer(path, field),
+                    "Give corner1 and corner2 as [x, y] in paper millimetres, or model_bounds with optional scale and paper_centre");
             }
         }
         for field in if fitted {
@@ -575,7 +568,7 @@ fn validate_at(
                     && field.starts_with("corner")
                     && canonical[*field] == json!([0.0, 0.0]))
             {
-                report.error("invalid_value", &pointer(path, field), "Use either corner1/corner2 with optional centre, or model_bounds with scale and paper_centre");
+                report.error("invalid_value", &pointer(path, field), "Use either corner1/corner2 with optional centre, or model_bounds with optional scale and paper_centre");
             }
         }
     }
