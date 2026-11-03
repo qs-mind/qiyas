@@ -5035,7 +5035,6 @@ dependencies = [
  "qiyas-pdf",
  "qiyas-plot",
  "qiyas-render",
- "qiyas-takeoff",
  "reqwest",
  "ring",
  "rmcp",
@@ -5083,7 +5082,6 @@ dependencies = [
  "qiyas-core",
  "qiyas-pdf",
  "qiyas-plot",
- "qiyas-takeoff",
  "rmcp",
  "serde",
  "serde_json",
@@ -5140,7 +5138,6 @@ dependencies = [
  "qiyas-ocr",
  "qiyas-pdf",
  "qiyas-plot",
- "qiyas-takeoff",
  "serde",
  "serde_json",
  "tauri",
@@ -5254,16 +5251,6 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "qiyas-takeoff"
-version = "0.0.2"
-dependencies = [
- "qiyas-core",
- "serde_json",
- "tempfile",
- "time",
 ]
 
 [[package]]

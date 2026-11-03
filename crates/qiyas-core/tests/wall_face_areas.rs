@@ -1,4 +1,4 @@
-//! Reviewed villa: physical union quantities and three independent generated BOQ items.
+//! A 120 x 150 m industrial hall, 30 m high: physical union quantities and generated BOQ items.
 use qiyas_core::{objects::ObjectFilter, Session, Source};
 use serde_json::{json, Value};
 
@@ -11,11 +11,11 @@ fn near(actual: f64, expected: f64) {
 }
 
 #[test]
-fn reviewed_villa_faces_and_boq_in_metres_millimetres_centimetres_and_inches() {
+fn reviewed_industrial_hall_faces_and_boq_in_metres_millimetres_centimetres_and_inches() {
     for units in [6, 4, 5, 1] {
         let dir = tempfile::tempdir().unwrap();
-        let mut session = Session::new_blank(&dir.path().join("villa.dxf"), units);
-        let k = 1.0 / session.drawing.units.to_metres();
+        let mut session = Session::new_blank(&dir.path().join("industrial_hall.dxf"), units);
+        let k = 10.0 / session.drawing.units.to_metres();
         let points = [
             vec![[0.1, 0.1], [11.9, 0.1], [11.9, 14.9], [0.1, 14.9]],
             vec![[0.1, 6.0], [11.9, 6.0]],
@@ -33,11 +33,11 @@ fn reviewed_villa_faces_and_boq_in_metres_millimetres_centimetres_and_inches() {
             .map(|run| run.iter().map(|p| [p[0] * k, p[1] * k]).collect())
             .collect();
         let runs: Vec<_> = points.iter().enumerate().map(|(i, p)| json!({
-            "points":p,"closed":i == 0,"thickness":if i == 0 {0.2*k} else {0.15*k},"height":3
+            "points":p,"closed":i == 0,"thickness":if i == 0 {0.2*k} else {0.15*k},"height":30
         })).collect();
         run(
             &mut session,
-            json!({"type":"walls","thickness":0.2*k,"height":3,"runs":runs}),
+            json!({"type":"walls","thickness":0.2*k,"height":30,"runs":runs}),
         );
         let groups = run(&mut session, json!({"type":"wall_groups","width":0.8*k}));
         let wall_runs: Vec<_> = groups["groups"]
@@ -83,7 +83,7 @@ fn reviewed_villa_faces_and_boq_in_metres_millimetres_centimetres_and_inches() {
                 .into_iter()
                 .map(|(at, width, sill, head)| {
                     json!({
-                        "at":at*k,"width":width*k,"sill":sill,"head":head,
+                        "at":at*k,"width":width*k,"sill":sill*10.0,"head":head*10.0,
                         "kind":if sill == 0.0 {"door"} else {"window"}
                     })
                 })
@@ -101,12 +101,12 @@ fn reviewed_villa_faces_and_boq_in_metres_millimetres_centimetres_and_inches() {
             .unwrap();
         assert_eq!(walls.len(), 10);
         for (name, expected) in [
-            ("gross_volume", 54.34125),
-            ("volume", 50.13075),
-            ("gross_external_face_area", 162.0),
-            ("gross_internal_face_area", 449.85),
-            ("external_face_area", 150.96),
-            ("internal_face_area", 412.11),
+            ("gross_volume", 54341.25),
+            ("volume", 50130.75),
+            ("gross_external_face_area", 16200.0),
+            ("gross_internal_face_area", 44985.0),
+            ("external_face_area", 15096.0),
+            ("internal_face_area", 41211.0),
         ] {
             near(walls.iter().map(|r| r.facts[name]).sum(), expected);
             for wall in &walls {
@@ -117,11 +117,11 @@ fn reviewed_villa_faces_and_boq_in_metres_millimetres_centimetres_and_inches() {
                 );
             }
         }
-        let citation = json!({"source":"Invented villa test method; not a published standard","clause":"Joined geometry"});
+        let citation = json!({"source":"Invented industrial hall test method; not a published standard","clause":"Joined geometry"});
         let items = [
-            ("masonry", "volume", "m3", 50.13),
-            ("plaster", "internal_face_area", "m2", 412.11),
-            ("render", "external_face_area", "m2", 150.96),
+            ("masonry", "volume", "m3", 50130.75),
+            ("plaster", "internal_face_area", "m2", 41211.0),
+            ("render", "external_face_area", "m2", 15096.0),
         ];
         let rules: Vec<_> = items.iter().map(|(id,fact,unit,_)| json!({
             "id":id,"element_type":"Legacy wall","kind":if *unit == "m3" {"volume"} else {"area"},
@@ -131,12 +131,12 @@ fn reviewed_villa_faces_and_boq_in_metres_millimetres_centimetres_and_inches() {
         run(
             &mut session,
             json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
-                "version":1,"name":"Villa test","title":"Villa test","based_on":"Synthetic geometry",
+                "version":1,"name":"Industrial hall test","title":"Industrial hall test","based_on":"Synthetic geometry",
                 "source_note":"Invented regression only","rules":rules
             }}),
         );
         let mappings: Vec<_> = items.iter().map(|(id,_,unit,_)| json!({
-            "rule":id,"code":id,"description_en":id,"description_ar":id,"unit":unit,"section":"Villa test","trade":id,"citation":citation
+            "rule":id,"code":id,"description_en":id,"description_ar":id,"unit":unit,"section":"Industrial hall test","trade":id,"citation":citation
         })).collect();
         run(
             &mut session,

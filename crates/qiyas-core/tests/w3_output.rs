@@ -494,7 +494,7 @@ fn make_sheet_makes_a_real_sheet_at_a_true_scale_in_every_unit() {
         let before = s.history_steps().0.len();
         let Outcome::Sheet { report } = run(
             &mut s,
-            json!({"type":"make_sheet","name":"A-101","project":"Villa","title":"Ground floor plan",
+            json!({"type":"make_sheet","name":"A-101","project":"Terminal","title":"Ground floor plan",
                 "drawing_no":"A-101","date":"2026-10-27","notes":["All dimensions in metres.","Assumptions are for review."]}),
         ) else {
             panic!("sheet")
@@ -544,7 +544,7 @@ fn make_sheet_makes_a_real_sheet_at_a_true_scale_in_every_unit() {
             .join("|");
         for must in [
             "Ground floor plan",
-            "Villa",
+            "Terminal",
             "A-101",
             "For review",
             &report.scale,

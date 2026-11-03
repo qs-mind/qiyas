@@ -351,23 +351,28 @@ mod tests {
         assert!(run("new_drawing", json!({"units":"cm","name":" "}), None).is_err());
         run(
             "new_drawing",
-            json!({ "units": "cm", "name":"Villa plans" }),
+            json!({ "units": "cm", "name":"Terminal plans" }),
             None,
         )
         .unwrap();
         run(
             "open_drawing",
-            json!({ "path": "/jobs/villa.dwg" }),
-            Some("open /jobs/villa.dwg please"),
+            json!({ "path": "/jobs/terminal.dwg" }),
+            Some("open /jobs/terminal.dwg please"),
         )
         .unwrap();
         run(
             "open_drawing",
             json!({ "path": "/etc/x.dwg" }),
-            Some("open the villa"),
+            Some("open the terminal"),
         )
         .unwrap();
-        run("open_drawing", json!({ "path": "/jobs/villa.dwg" }), None).unwrap();
+        run(
+            "open_drawing",
+            json!({ "path": "/jobs/terminal.dwg" }),
+            None,
+        )
+        .unwrap();
         assert!(run("open_drawing", json!({ "path": "  " }), None).is_err());
         assert!(run("switch_drawing", json!({}), None).is_err());
         assert!(run("switch_drawing", json!({ "id": -1 }), None).is_err());
@@ -377,10 +382,10 @@ mod tests {
         assert_eq!(
             *host.calls.lock().unwrap(),
             [
-                "new Villa plans cm",
-                "open /jobs/villa.dwg true",
+                "new Terminal plans cm",
+                "open /jobs/terminal.dwg true",
                 "open /etc/x.dwg false",
-                "open /jobs/villa.dwg false",
+                "open /jobs/terminal.dwg false",
                 "switch 2",
                 "close None",
                 "close Some(3)",

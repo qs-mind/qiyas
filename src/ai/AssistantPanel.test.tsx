@@ -617,7 +617,7 @@ test("an alef carrying tanween is written with the tanween first in the box, so 
 });
 
 test("an Arabic conversation shows Mizan's steps and its waiting line in Arabic in an English window", () => {
-  const user = { kind: "user" as const, text: "ارسم فيلا صغيرة" };
+  const user = { kind: "user" as const, text: "ارسم مطار دولي" };
   const lookup: ToolCardItem = { ...card, id: "t2", label: "commands", mutating: false, handles: [],
     activity: { category: "drawing", effect: "read", detail: { key: "activity.line.lookup", params: { what: "command", name: "wall_groups, space_check" } } } };
   setup({ items: [user, lookup] }, true);

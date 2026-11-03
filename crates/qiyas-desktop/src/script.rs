@@ -345,7 +345,11 @@ fn run_step<R: Runtime>(
         }
         Action::Compare => {
             let conflicts = with_session(state, |s| {
-                qiyas_takeoff::compare_session(s, qiyas_takeoff::DEFAULT_TOLERANCE, Source::User)
+                qiyas_core::discrepancy::compare_session(
+                    s,
+                    qiyas_core::discrepancy::DEFAULT_TOLERANCE,
+                    Source::User,
+                )
             })?;
             (format!("{} conflicts", conflicts.len()), true)
         }

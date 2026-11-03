@@ -16,8 +16,8 @@ const WindowProviders = ({ children }: { children: ReactNode }) => (
   <LanguageProvider><DialogsProvider>{children}</DialogsProvider></LanguageProvider>
 );
 
-const VILLA = "/jobs/villa.dwg";
-const RECOVERED = "/jobs/villa (recovered).dwg";
+const TERMINAL = "/jobs/terminal.dwg";
+const RECOVERED = "/jobs/terminal (recovered).dwg";
 const UNTITLED = "/home/qs/.config/com.qsmind.qiyas/untitled/Untitled-1.dwg";
 
 const core = vi.hoisted(() => ({
@@ -50,11 +50,11 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "new_drawing":
         return { ...info(UNTITLED), untitled: true };
       case "tabs":
-        return { tabs: [{ id: 2, path: VILLA, title: "villa.dwg", dirty: true, busy: core.busy }], active: core.active };
+        return { tabs: [{ id: 2, path: TERMINAL, title: "terminal.dwg", dirty: true, busy: core.busy }], active: core.active };
       case "drawing_info":
-        return info(VILLA);
+        return info(TERMINAL);
       case "activate_tab":
-        return info(VILLA);
+        return info(TERMINAL);
       case "ai_cancel":
         if (!core.keepBusy) core.busy = false;
         return null;
@@ -124,8 +124,8 @@ function info(path: string) {
 }
 
 const item = (more: Partial<Recoverable> = {}): Recoverable => ({
-  drawing: VILLA,
-  autosave: `${VILLA}.sv$`,
+  drawing: TERMINAL,
+  autosave: `${TERMINAL}.sv$`,
   saved_at: 1_760_000_000,
   drawing_at: 1_759_999_000,
   crashed: true,
@@ -184,10 +184,10 @@ async function launch(notices: string[] = []) {
 }
 
 test("at launch an untitled drawing's crash autosave is asked about with the recent drawings", async () => {
-  recoverable.recents = [VILLA];
+  recoverable.recents = [TERMINAL];
   recoverable.untitled = [UNTITLED];
   await launch();
-  expect(core.calls).toContain(`recoverable_drawings {"paths":["${VILLA}","${UNTITLED}"]}`);
+  expect(core.calls).toContain(`recoverable_drawings {"paths":["${TERMINAL}","${UNTITLED}"]}`);
 });
 
 test("Mizan's requests: a drawing it put on screen is shown; closing unsaved work asks, keeping its conversation", async () => {
@@ -224,9 +224,9 @@ test("Recover at launch, nothing open: Save As is offered with the recovered dra
   const { result } = await launch(notices);
   act(() => result.current.setRecoveries((q) => enqueue(q, [item()], null, true)));
 
-  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
+  await act(() => result.current.recoverFrom(result.current.recovery!, TERMINAL));
 
-  expect(core.calls).toContain(`recover_autosave {"path":"${VILLA}"}`);
+  expect(core.calls).toContain(`recover_autosave {"path":"${TERMINAL}"}`);
   expect(dialogs.save).toHaveBeenCalledTimes(1);
   expect(dialogs.save.mock.calls[0][0].defaultPath).toBe(RECOVERED);
   expect(notices.at(-1)).toBe(`Recovered from autosave of ⁨${localTime(1_760_000_000, "en")}⁩`);
@@ -237,37 +237,37 @@ test("Recover then a real Save As: the notice says both where it came from and w
   const notices: string[] = [];
   const { result } = await launch(notices);
   act(() => result.current.setRecoveries((q) => enqueue(q, [item()], null, true)));
-  dialogs.save.mockResolvedValueOnce("/jobs/villa-fixed.dwg");
+  dialogs.save.mockResolvedValueOnce("/jobs/terminal-fixed.dwg");
 
-  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
+  await act(() => result.current.recoverFrom(result.current.recovery!, TERMINAL));
 
-  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/villa-fixed.dwg","workspace":2}`);
+  expect(core.calls).toContain(`save_drawing_as {"path":"/jobs/terminal-fixed.dwg","workspace":2}`);
   expect(notices.at(-1)).toBe(
-    `Recovered from autosave of ⁨${localTime(1_760_000_000, "en")}⁩; saved to ⁨/jobs/villa-fixed.dwg⁩`,
+    `Recovered from autosave of ⁨${localTime(1_760_000_000, "en")}⁩; saved to ⁨/jobs/terminal-fixed.dwg⁩`,
   );
 });
 
 test("an older copy is recovered by its own path, and only it leaves the row", async () => {
   const notices: string[] = [];
   const { result } = await launch(notices);
-  const older = { path: `${VILLA}.sv$.crash-20261010-090000`, saved_at: 1_760_080_000, kind: "crash" as const };
-  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false, older_copies: [older] })], VILLA)));
+  const older = { path: `${TERMINAL}.sv$.crash-20261010-090000`, saved_at: 1_760_080_000, kind: "crash" as const };
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false, older_copies: [older] })], TERMINAL)));
 
-  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA, older.path));
+  await act(() => result.current.recoverFrom(result.current.recovery!, TERMINAL, older.path));
 
   expect(core.calls).toContain(`recover_autosave {"path":"${older.path}"}`);
   expect(notices.at(-1)).toContain(localTime(1_760_080_000, "en"));
-  expect(result.current.recovery?.items.map((i) => [i.drawing, i.older_copies.length])).toEqual([[VILLA, 0]]);
+  expect(result.current.recovery?.items.map((i) => [i.drawing, i.older_copies.length])).toEqual([[TERMINAL, 0]]);
 });
 
 test("Recover acts on the question it was clicked in, even when the launch question came in ahead", async () => {
   const { result } = await launch();
-  act(() => result.current.setRecoveries((q) => enqueue(q, [item()], VILLA)));
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item()], TERMINAL)));
   const asked = result.current.recovery!;
   // The launch question arrives while the click is on its way.
   act(() => result.current.setRecoveries((q) => enqueue(q, [item({ drawing: "/jobs/tower.dwg" })], null, true)));
 
-  await act(() => result.current.recoverFrom(asked, VILLA));
+  await act(() => result.current.recoverFrom(asked, TERMINAL));
 
   expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual(["/jobs/tower.dwg"]);
   act(() => result.current.setRecoveries((q) => q.slice(1)));
@@ -279,7 +279,7 @@ test("Recover with another drawing open: Save As suggests the recovered drawing,
   await act(() => result.current.openPath("/jobs/tower.dwg", false));
   act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false })], null, true)));
 
-  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
+  await act(() => result.current.recoverFrom(result.current.recovery!, TERMINAL));
 
   expect(dialogs.save.mock.calls[0][0].defaultPath).toBe(RECOVERED);
 });
@@ -287,26 +287,26 @@ test("Recover with another drawing open: Save As suggests the recovered drawing,
 test("Open anyway: a drawing open in another Qiyas opens here once, its autosave left alone", async () => {
   const { result } = await launch();
   const locked = item({ crashed: false, locked_elsewhere: { pid: 4242, host: "site-office-pc", started_at: 1 } });
-  act(() => result.current.setRecoveries((q) => enqueue(q, [locked], VILLA)));
+  act(() => result.current.setRecoveries((q) => enqueue(q, [locked], TERMINAL)));
   core.calls.length = 0;
 
-  await act(() => result.current.openAnyway(result.current.recovery!, VILLA));
+  await act(() => result.current.openAnyway(result.current.recovery!, TERMINAL));
 
-  expect(core.calls.filter((c) => c.startsWith("open_drawing"))).toEqual([`open_drawing {"path":"${VILLA}"}`]);
+  expect(core.calls.filter((c) => c.startsWith("open_drawing"))).toEqual([`open_drawing {"path":"${TERMINAL}"}`]);
   expect(core.calls.some((c) => c.startsWith("discard_autosave"))).toBe(false);
   expect(result.current.recovery).toBeNull();
 });
 
 test("a refused Discard reaches the dialog as its error: the question stays and nothing opens", async () => {
   const { result } = await launch();
-  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false })], VILLA)));
-  core.refuseDiscard = "/jobs/villa.dwg is open in another Qiyas (process 4242 on x): its autosave stays";
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ crashed: false })], TERMINAL)));
+  core.refuseDiscard = "/jobs/terminal.dwg is open in another Qiyas (process 4242 on x): its autosave stays";
   core.calls.length = 0;
 
-  await act(() => expect(result.current.discardFrom(result.current.recovery!, VILLA)).rejects.toBe(core.refuseDiscard));
+  await act(() => expect(result.current.discardFrom(result.current.recovery!, TERMINAL)).rejects.toBe(core.refuseDiscard));
 
-  expect(core.calls).toEqual([`discard_autosave {"path":"${VILLA}"}`]);
-  expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual([VILLA]);
+  expect(core.calls).toEqual([`discard_autosave {"path":"${TERMINAL}"}`]);
+  expect(result.current.recovery?.items.map((i) => i.drawing)).toEqual([TERMINAL]);
 });
 
 test("at launch a recent drawing open in another Qiyas, or one that crashed clean, is not asked about; a crash autosave is", async () => {
@@ -336,7 +336,7 @@ async function openWithLater(found: Recoverable[]) {
   );
   await act(async () => {});
   recoverable.found = found;
-  await act(() => latest!.openPath(VILLA));
+  await act(() => latest!.openPath(TERMINAL));
   core.calls.length = 0;
   fireEvent.click(screen.getByRole("button", { name: "Later" }));
   await act(async () => {});
@@ -345,7 +345,7 @@ async function openWithLater(found: Recoverable[]) {
 test("Later on an open's question opens the drawing itself and discards nothing", async () => {
   await openWithLater([item()]);
   expect(core.calls.filter((c) => /^(open_drawing|discard_autosave)/.test(c))).toEqual([
-    `open_drawing {"path":"${VILLA}"}`,
+    `open_drawing {"path":"${TERMINAL}"}`,
   ]);
   expect(screen.queryByRole("dialog")).toBeNull();
 });
@@ -357,46 +357,46 @@ test("Later on a drawing open in another Qiyas opens nothing", async () => {
   expect(core.calls.filter((c) => /^(open_drawing|discard_autosave)/.test(c))).toEqual([]);
 });
 
-const crashCopy = (stamp: string) => ({ path: `${VILLA}.sv$.crash-${stamp}`, saved_at: 1_760_080_000, kind: "crash" as const });
+const crashCopy = (stamp: string) => ({ path: `${TERMINAL}.sv$.crash-${stamp}`, saved_at: 1_760_080_000, kind: "crash" as const });
 const opens = () => core.calls.filter((c) => c.startsWith("open_drawing"));
 
 test("an open's copies-only question: discarding the last copy opens the drawing asked for", async () => {
   const { result } = await launch();
   const copies = [crashCopy("2"), crashCopy("1")];
-  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ autosave: null, saved_at: null, crashed: false, older_copies: copies })], VILLA)));
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ autosave: null, saved_at: null, crashed: false, older_copies: copies })], TERMINAL)));
   core.calls.length = 0;
 
-  await act(() => result.current.discardFrom(result.current.recovery!, VILLA, copies[0].path));
+  await act(() => result.current.discardFrom(result.current.recovery!, TERMINAL, copies[0].path));
   expect(opens()).toEqual([]);
-  await act(() => result.current.discardFrom(result.current.recovery!, VILLA, copies[1].path));
+  await act(() => result.current.discardFrom(result.current.recovery!, TERMINAL, copies[1].path));
 
   expect(core.calls.filter((c) => c.startsWith("discard_autosave"))).toEqual(
     copies.map((c) => `discard_autosave {"path":"${c.path}"}`),
   );
-  expect(opens()).toEqual([`open_drawing {"path":"${VILLA}"}`]);
+  expect(opens()).toEqual([`open_drawing {"path":"${TERMINAL}"}`]);
   expect(result.current.recovery).toBeNull();
 });
 
 test("Discard of the main autosave keeps the older copies listed; the drawing opens when the last is dealt with", async () => {
   const { result } = await launch();
   const copies = [crashCopy("1")];
-  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ older_copies: copies })], VILLA)));
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ older_copies: copies })], TERMINAL)));
   core.calls.length = 0;
 
-  await act(() => result.current.discardFrom(result.current.recovery!, VILLA));
+  await act(() => result.current.discardFrom(result.current.recovery!, TERMINAL));
   expect(result.current.recovery?.items.map((i) => [i.autosave, i.older_copies.length])).toEqual([[null, 1]]);
   expect(opens()).toEqual([]);
 
-  await act(() => result.current.discardFrom(result.current.recovery!, VILLA, copies[0].path));
-  expect(opens()).toEqual([`open_drawing {"path":"${VILLA}"}`]);
+  await act(() => result.current.discardFrom(result.current.recovery!, TERMINAL, copies[0].path));
+  expect(opens()).toEqual([`open_drawing {"path":"${TERMINAL}"}`]);
   expect(result.current.recovery).toBeNull();
 });
 
 test("Recover of the main autosave keeps the older copies listed, and Later no longer opens the original", async () => {
   const { result } = await launch();
-  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ older_copies: [crashCopy("1")] })], VILLA)));
+  act(() => result.current.setRecoveries((q) => enqueue(q, [item({ older_copies: [crashCopy("1")] })], TERMINAL)));
 
-  await act(() => result.current.recoverFrom(result.current.recovery!, VILLA));
+  await act(() => result.current.recoverFrom(result.current.recovery!, TERMINAL));
 
   expect(result.current.recovery?.items.map((i) => [i.autosave, i.older_copies.length])).toEqual([[null, 1]]);
   expect(laterOpens(result.current.recovery!)).toBeNull();
@@ -423,7 +423,7 @@ test("continuing a chat waits for autosave recovery before restoring the convers
 test("a missing chat drawing stays closed with a notice and an open tab keeps the conversation", async () => {
   const notices: string[] = [];
   const { result } = await launch(notices);
-  const chat = { id: "saved", title: "Villa", drawing: VILLA, drawing_exists: true, updated: 1, turns: 1 };
+  const chat = { id: "saved", title: "Terminal", drawing: TERMINAL, drawing_exists: true, updated: 1, turns: 1 };
   await act(async () => { expect(await result.current.prepareConversation(chat)).toBe(true); });
   expect(core.calls.some((call) => call.startsWith("open_drawing"))).toBe(false);
   await act(async () => { expect(await result.current.prepareConversation({ ...chat, drawing: null, drawing_exists: false })).toBe(false); });

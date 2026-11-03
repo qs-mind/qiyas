@@ -20,7 +20,7 @@ use crate::scripted;
 use scripted::{Script, ScriptCall};
 
 const MODEL: &str = "*Model_Space";
-const ROOMS: [&str; 4] = ["Living", "Kitchen", "Bedroom", "Bath"];
+const ROOMS: [&str; 4] = ["Check-in", "Security", "Departures", "Arrivals"];
 const LAYERS: [&str; 6] = [
     "A-WALL",
     "A-DOOR",
@@ -143,22 +143,22 @@ fn remembered_outcome(request: &TurnRequest, command: &str) -> Value {
     panic!("missing retained handles for {command}");
 }
 
-fn villa_verify(request: &TurnRequest) -> (&'static str, Value) {
+fn terminal_verify(request: &TurnRequest) -> (&'static str, Value) {
     let walls = remembered_outcome(request, "walls");
     let outer = walls["centrelines"][0].clone();
     let pair = json!([{"handle": outer}, {"handle": outer}]);
     let mut expectations = vec![
-        json!({"kind": "distance", "targets": pair, "points": [[0,0],[12,0]],
-               "value": 12, "in_metres": true}),
-        json!({"kind": "distance", "targets": pair, "points": [[0,0],[0,10]],
-               "value": 10, "in_metres": true}),
-        json!({"kind": "parallel", "targets": pair, "points": [[3,0],[3,10]]}),
-        json!({"kind": "parallel", "targets": pair, "points": [[0,3],[12,3]]}),
+        json!({"kind": "distance", "targets": pair, "points": [[0,0],[120,0]],
+               "value": 120, "in_metres": true}),
+        json!({"kind": "distance", "targets": pair, "points": [[0,0],[0,100]],
+               "value": 100, "in_metres": true}),
+        json!({"kind": "parallel", "targets": pair, "points": [[30,0],[30,100]]}),
+        json!({"kind": "parallel", "targets": pair, "points": [[0,30],[120,30]]}),
         json!({"kind": "closed", "targets": [{"handle": outer}]}),
-        json!({"kind": "area", "targets": targets(&walls["hatches"]), "value": 11.46,
+        json!({"kind": "area", "targets": targets(&walls["hatches"]), "value": 130.26,
                "tolerance": 1e-6, "in_metres": true}),
         json!({"kind": "inside_bounds", "targets": targets(&walls["outlines"]),
-               "bounds": [[-0.1,-0.1],[12.1,10.1]]}),
+               "bounds": [[-0.1,-0.1],[120.1,100.1]]}),
         json!({"kind": "count", "layer": "A-ROOM-NAME", "entity_type": "Text", "value": 4}),
     ];
     // Verify checks the wall contours; rooms separately proves each named space is enclosed.
@@ -285,7 +285,7 @@ fn on_layer(session: &Session, handles: &Value, layer: &str) {
 }
 
 #[tokio::test]
-async fn villa_ground_floor_through_mizans_three_tools() {
+async fn terminal_ground_floor_through_mizans_three_tools() {
     let mut steps = vec![
         call(READ, "state", json!({})),
         call(READ, "commands", json!({"name": "walls"})),
@@ -294,23 +294,23 @@ async fn villa_ground_floor_through_mizans_three_tools() {
             "batch",
             json!({"commands": LAYERS.map(|name| json!({"type": "new_layer", "name": name}))}),
         ),
-        run(json!({"type": "annotation_scale", "name": "1:100"})),
+        run(json!({"type": "annotation_scale", "name": "1:250"})),
         run(json!({
             "type": "walls", "thickness": 0.2, "height": 3,
             "runs": [
-                {"points": [[0,0],[12,0],[12,10],[0,10]], "closed": true},
-                {"points": [[6,0],[6,10]]},
-                {"points": [[0,5],[12,5]]}
+                {"points": [[0,0],[120,0],[120,100],[0,100]], "closed": true},
+                {"points": [[60,0],[60,100]]},
+                {"points": [[0,50],[120,50]]}
             ],
             "openings": [
-                {"run": 0, "at": 3, "width": 0.9, "kind": "door"},
-                {"run": 0, "at": 9, "width": 1.2, "kind": "window", "sill": 0.9, "head": 2.1},
-                {"run": 0, "at": 25, "width": 1.2, "kind": "window", "sill": 0.9, "head": 2.1},
-                {"run": 0, "at": 31, "width": 1.2, "kind": "window", "sill": 0.9, "head": 2.1},
-                {"run": 1, "at": 2.5, "width": 0.9, "kind": "door"},
-                {"run": 1, "at": 7.5, "width": 0.9, "kind": "door"},
-                {"run": 2, "at": 3, "width": 0.9, "kind": "door"},
-                {"run": 2, "at": 9, "width": 0.9, "kind": "door"}
+                {"run": 0, "at": 30, "width": 0.9, "kind": "door"},
+                {"run": 0, "at": 90, "width": 1.2, "kind": "window", "sill": 0.9, "head": 2.1},
+                {"run": 0, "at": 250, "width": 1.2, "kind": "window", "sill": 0.9, "head": 2.1},
+                {"run": 0, "at": 310, "width": 1.2, "kind": "window", "sill": 0.9, "head": 2.1},
+                {"run": 1, "at": 25, "width": 0.9, "kind": "door"},
+                {"run": 1, "at": 75, "width": 0.9, "kind": "door"},
+                {"run": 2, "at": 30, "width": 0.9, "kind": "door"},
+                {"run": 2, "at": 90, "width": 0.9, "kind": "door"}
             ]
         })),
         run(
@@ -320,7 +320,7 @@ async fn villa_ground_floor_through_mizans_three_tools() {
             "A-ROOM-NAME",
             ROOMS
                 .into_iter()
-                .zip([[0.6, 2.5], [6.6, 2.5], [0.6, 7.5], [6.6, 7.5]])
+                .zip([[6.0, 25.0], [66.0, 25.0], [6.0, 75.0], [66.0, 75.0]])
                 .map(|(value, at)| json!({"type": "text", "value": value, "at": at, "rotation": 0}))
                 .collect(),
         ),
@@ -332,17 +332,17 @@ async fn villa_ground_floor_through_mizans_three_tools() {
         batch(
             "A-ANNO-DIMS",
             vec![
-                json!({"type": "dimension", "kind": "linear", "p1": [0,0], "p2": [12,0], "line_point": [6,-2]}),
-                json!({"type": "dimension", "kind": "linear", "p1": [0,0], "p2": [0,10], "line_point": [-2,5]}),
+                json!({"type": "dimension", "kind": "linear", "p1": [0,0], "p2": [120,0], "line_point": [60,-5]}),
+                json!({"type": "dimension", "kind": "linear", "p1": [0,0], "p2": [0,100], "line_point": [-5,50]}),
             ],
         ),
         run(json!({"type": "grid",
-            "x": [{"label":"A","at":0},{"label":"B","at":6},{"label":"C","at":12}],
-            "y": [{"label":"1","at":0},{"label":"2","at":5},{"label":"3","at":10}],
-            "extent": {"min": [-1,-1], "max": [13,11]}
+            "x": [{"label":"A","at":0},{"label":"B","at":60},{"label":"C","at":120}],
+            "y": [{"label":"1","at":0},{"label":"2","at":50},{"label":"3","at":100}],
+            "extent": {"min": [-3,-3], "max": [123,103]}
         })),
         call(READ, "rooms", json!({"text_layer": "A-ROOM-NAME"})),
-        ScriptCall::FromHistory(villa_verify),
+        ScriptCall::FromHistory(terminal_verify),
         call(READ, "check", json!({"packs": ["general","construction"]})),
         call(
             READ,
@@ -358,9 +358,9 @@ async fn villa_ground_floor_through_mizans_three_tools() {
             "A-ANNO-TEXT",
             vec![
                 json!({"type": "mview", "corner1": [40,100], "corner2": [790,560],
-                   "scale": "1:100", "centre": [6,5]}),
+                   "scale": "1:250", "centre": [60,50]}),
                 json!({"type": "title_block", "fields": {
-                    "title": "Villa ground floor", "drawing_no": "A-001", "scale": "1:100"
+                    "title": "Terminal ground floor", "drawing_no": "A-001", "scale": "1:250"
                 }}),
             ],
         ),
@@ -369,10 +369,10 @@ async fn villa_ground_floor_through_mizans_three_tools() {
     ];
     steps.push(call(READ, "state", json!({})));
     let eval = evaluate(
-        "Draft the specified 12 x 10 m villa ground floor, four named rooms, 200 mm walls, \
+        "Draft the specified 120 x 100 m international terminal ground floor, four named halls, 200 mm walls, \
          five 900 mm doors and three 1200 mm windows. Add dimensions, structural axes, \
-         candidate space labels and an A1 layout at 1:100. Title: Villa ground floor; \
-         drawing number: A-001; scale: 1:100. Check the drawing and verify the stated intent.",
+         candidate space labels and an A1 layout at 1:250. Title: Terminal ground floor; \
+         drawing number: A-001; scale: 1:250. Check the drawing and verify the stated intent.",
         steps,
     )
     .await;
@@ -380,7 +380,7 @@ async fn villa_ground_floor_through_mizans_three_tools() {
     assert_eq!(eval.pictures, 2);
     assert_eq!(eval.results[0]["entities_on_sheet"], 0);
     near(&eval.results[0]["metres_per_unit"], 1.0);
-    assert_eq!(eval.results.last().unwrap()["annotation_scale"], "1:100");
+    assert_eq!(eval.results.last().unwrap()["annotation_scale"], "1:250");
     let layers_batch = command_result(&eval.results, "batch");
     assert_eq!(
         layers_batch["outcome"]["steps"].as_array().unwrap().len(),
@@ -391,12 +391,12 @@ async fn villa_ground_floor_through_mizans_three_tools() {
         assert!(eval.session.drawing.doc.layers.contains(layer));
     }
     let wall = command_result(&eval.results, "walls")["outcome"].clone();
-    // Gross = 12.2*10.2 - 4*(5.8*4.8); net removes .2*(5*.9 + 3*1.2).
-    // Volume keeps lintels/sills: 13.08*3 - .2*(5*.9*2.1 + 3*1.2*1.2).
-    near(&wall["centreline_length"], 66.0);
-    near(&wall["gross_area"], 13.08);
-    near(&wall["net_area"], 11.46);
-    near(&wall["volume"], 36.486);
+    // Gross = 120.2*100.2 - 4*(59.8*49.8); net removes .2*(5*.9 + 3*1.2).
+    // Volume keeps lintels/sills: 131.88*3 - .2*(5*.9*2.1 + 3*1.2*1.2).
+    near(&wall["centreline_length"], 660.0);
+    near(&wall["gross_area"], 131.88);
+    near(&wall["net_area"], 130.26);
+    near(&wall["volume"], 392.886);
     for (field, layer) in [
         ("outlines", "A-WALL"),
         ("hatches", "A-WALL-PATT"),
@@ -423,7 +423,7 @@ async fn villa_ground_floor_through_mizans_three_tools() {
         );
         for room in rooms {
             assert!(
-                room["candidate_area_m2"].as_f64().unwrap() > 20.0,
+                room["candidate_area_m2"].as_f64().unwrap() > 2900.0,
                 "{room:#}"
             );
             assert!(room.get("also_named").is_none(), "{room:#}");
@@ -495,7 +495,7 @@ async fn villa_ground_floor_through_mizans_three_tools() {
             }
             EntityType::Text(text) if ROOMS.contains(&text.value.as_str()) => {
                 assert_eq!(text.common.layer, "A-ROOM-NAME");
-                near(&json!(text.height), 0.25);
+                near(&json!(text.height), 0.625);
                 names += 1;
             }
             EntityType::Text(text) if text.value.starts_with("Area ") => {
@@ -520,7 +520,7 @@ async fn villa_ground_floor_through_mizans_three_tools() {
         assert_eq!(entity.common().layer, expected_layer);
         match entity {
             EntityType::Viewport(v) => {
-                near(&json!(1000.0 / v.scale()), 100.0);
+                near(&json!(1000.0 / v.scale()), 250.0);
                 viewport_count += 1;
             }
             EntityType::MText(text) => {
@@ -535,9 +535,9 @@ async fn villa_ground_floor_through_mizans_three_tools() {
         // 2026-10-29-drawing-craft-sheets: captions and review status are visible;
         // unknown field values stay blank.
         BTreeSet::from([
-            "Villa ground floor",
+            "Terminal ground floor",
             "A-001",
-            "1:100",
+            "1:250",
             "Project",
             "Title",
             "Client",

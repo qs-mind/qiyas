@@ -439,7 +439,7 @@ pub enum Command {
     #[schemars(extend("x-category" = "boq"))]
     #[schemars(example = json!({"type": "set_boq_tolerance", "code": "03.01", "percent": 5.0}))]
     SetBoqTolerance { code: String, percent: Option<f64> },
-    /// Replaces the conflicts with those of a new comparison (`qiyas_takeoff::compare`), and the
+    /// Replaces the conflicts with those of a new comparison (`qiyas_core::discrepancy::compare`), and the
     /// schedules with the ones it read off the sheets.
     #[schemars(extend("x-category" = "boq", "x-internal" = true, "x-destructive" = true))]
     #[schemars(example = json!({"type": "set_conflicts", "conflicts": [], "schedules": []}))]
@@ -1241,7 +1241,7 @@ pub enum Command {
     /// للفصل بين المساقط والجداول والملاحظات والمفاتيح، ثم افحص التداخل واطبع. اعرض القيم
     /// المسجلة بحقول القرارات واحتفظ بحالة اللوحة «للمراجعة».
     #[schemars(extend("x-category" = "layouts", "x-words" = ["MAKESHEET"]))]
-    #[schemars(example = json!({"type": "make_sheet", "name": "A-101 Ground floor", "project": "Villa", "title": "Ground floor plan", "drawing_no": "A-101", "language": "en", "notes": ["All dimensions in metres.", "Assumptions are for review."]}))]
+    #[schemars(example = json!({"type": "make_sheet", "name": "A-101 Ground floor", "project": "Terminal", "title": "Ground floor plan", "drawing_no": "A-101", "language": "en", "notes": ["All dimensions in metres.", "Assumptions are for review."]}))]
     #[schemars(example = json!({"type":"make_sheet","name":"S-01","paper":"ISO A1","scale":"1:250","model_bounds":[[0,0],[180,96]],"split_lines":[[[80,0],[80,96]]],"core_regions":[[[85,40],[95,40],[95,55],[85,55]]],"client":"Client","consultant":"Consultant","project_no":"P-01","checked_by":"","approved_by":"","revision_table":[]}))]
     MakeSheet(Box<crate::sheet_setup::SheetSpec>),
     /// Arrange plans, tables, notes and legends in rows with paper-sized gaps. Each item moves

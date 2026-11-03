@@ -32,7 +32,7 @@ fn english(dir: &Path) -> PathBuf {
     let mut book = Workbook::new();
     let cover = book.add_worksheet().set_name("Cover").unwrap();
     cover
-        .write_string(0, 0, "Villa project, tender BOQ")
+        .write_string(0, 0, "Terminal project, tender BOQ")
         .unwrap();
     let sheet = book.add_worksheet().set_name("BOQ").unwrap();
     write_rows(
@@ -66,7 +66,7 @@ fn arabic(dir: &Path) -> PathBuf {
     let mut book = Workbook::new();
     let sheet = book.add_worksheet().set_name("جدول الكميات").unwrap();
     let title = Format::new().set_bold();
-    sheet.merge_range(0, 0, 0, 4, "مشروع فيلا", &title).unwrap();
+    sheet.merge_range(0, 0, 0, 4, "مشروع مطار", &title).unwrap();
     sheet
         .merge_range(1, 0, 1, 4, "جدول الكميات - أعمال مدنية", &title)
         .unwrap();

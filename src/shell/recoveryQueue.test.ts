@@ -83,7 +83,7 @@ test("times are written in the app's language, whatever the system's", () => {
 
 test("Rust's refusal of a Discard gives the PID and the computer, to say in the window's language", () => {
   expect(
-    refusedBy("/jobs/villa.dwg is open in another Qiyas (process 4242 on site-office-pc): its autosave stays"),
+    refusedBy("/jobs/terminal.dwg is open in another Qiyas (process 4242 on site-office-pc): its autosave stays"),
   ).toEqual({ pid: "4242", host: "site-office-pc" });
   expect(refusedBy("Permission denied (os error 13)")).toBeNull();
 });

@@ -16,7 +16,7 @@ describe("safe paste", () => {
   let uninstall: () => void;
   beforeEach(() => {
     uninstall = installSafePaste();
-    api.clipboardReadText.mockResolvedValue("a villa in Riyadh");
+    api.clipboardReadText.mockResolvedValue("a terminal in Riyadh");
     api.clipboardReadImage.mockResolvedValue(new ArrayBuffer(0));
   });
   afterEach(() => {
@@ -55,7 +55,7 @@ describe("safe paste", () => {
     box.dispatchEvent(e);
     expect(e.defaultPrevented).toBe(true);
     await settle();
-    expect(box.value).toBe("Draw: a villa in Riyadh");
+    expect(box.value).toBe("Draw: a terminal in Riyadh");
     expect(typed).toHaveBeenCalled();
   });
 

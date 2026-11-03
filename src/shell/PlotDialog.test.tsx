@@ -170,10 +170,10 @@ test("Plot to PDF offers <drawing>.pdf beside the drawing, plots there, keeps th
 });
 
 test("a Windows drawing's PDF is offered beside it too; cancelling the Save dialog plots nothing", async () => {
-  const { props } = setup({ drawingPath: "C:\\jobs\\villa.v2.dxf", choosePdf: vi.fn(async () => null) });
+  const { props } = setup({ drawingPath: "C:\\jobs\\terminal.v2.dxf", choosePdf: vi.fn(async () => null) });
   await loaded();
   fireEvent.click(plotButton());
-  await waitFor(() => expect(props.choosePdf).toHaveBeenCalledWith("C:\\jobs\\villa.v2.pdf"));
+  await waitFor(() => expect(props.choosePdf).toHaveBeenCalledWith("C:\\jobs\\terminal.v2.pdf"));
   expect(props.onPlotPdf).not.toHaveBeenCalled();
   expect(props.onClose).not.toHaveBeenCalled();
 });

@@ -9,20 +9,20 @@ import { FileName } from "./FileName";
 afterEach(cleanup);
 
 const tabs: TabInfo[] = [
-  { id: 1, path: "/plans/villa.dwg", title: "villa.dwg", dirty: false },
+  { id: 1, path: "/plans/terminal.dwg", title: "terminal.dwg", dirty: false },
   { id: 4, path: "/plans/tower.dxf", title: "tower.dxf", dirty: true },
 ];
 
 test("a tab per drawing: the active one selected, a dot while unsaved", () => {
   const onSelect = vi.fn();
   render(<FileTabs tabs={tabs} active={4} onSelect={onSelect} onClose={() => {}} />);
-  const villa = screen.getByRole("tab", { name: "villa.dwg" });
+  const terminal = screen.getByRole("tab", { name: "terminal.dwg" });
   const tower = screen.getByRole("tab", { name: /tower\.dxf/ });
-  expect(villa.getAttribute("aria-selected")).toBe("false");
+  expect(terminal.getAttribute("aria-selected")).toBe("false");
   expect(tower.getAttribute("aria-selected")).toBe("true");
   expect(tower.querySelector(".dirty")).not.toBeNull();
-  expect(villa.querySelector(".dirty")).toBeNull();
-  fireEvent.click(villa);
+  expect(terminal.querySelector(".dirty")).toBeNull();
+  fireEvent.click(terminal);
   expect(onSelect).toHaveBeenCalledWith(1);
 });
 
@@ -30,7 +30,7 @@ test("× and a middle click close a tab", () => {
   const onClose = vi.fn();
   const onSelect = vi.fn();
   render(<FileTabs tabs={tabs} active={1} onSelect={onSelect} onClose={onClose} />);
-  fireEvent.click(screen.getByRole("button", { name: "Close villa.dwg" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close terminal.dwg" }));
   expect(onClose).toHaveBeenLastCalledWith(1);
   fireEvent(
     screen.getByRole("tab", { name: /tower\.dxf/ }),
@@ -57,12 +57,12 @@ test("Ctrl+Tab goes round the tabs both ways", () => {
 
 test("one tab is in the Tab order and the arrows move between tabs", () => {
   render(<FileTabs tabs={tabs} active={4} onSelect={() => {}} onClose={() => {}} />);
-  const villa = screen.getByRole("tab", { name: "villa.dwg" });
+  const terminal = screen.getByRole("tab", { name: "terminal.dwg" });
   const tower = screen.getByRole("tab", { name: /tower\.dxf/ });
-  expect([villa.tabIndex, tower.tabIndex]).toEqual([-1, 0]);
+  expect([terminal.tabIndex, tower.tabIndex]).toEqual([-1, 0]);
   tower.focus();
   fireEvent.keyDown(tower, { key: "ArrowLeft" });
-  expect(document.activeElement).toBe(villa);
+  expect(document.activeElement).toBe(terminal);
 });
 
 test("each drawing exposes its own Mizan status", () => {
@@ -79,19 +79,19 @@ test("each drawing exposes its own Mizan status", () => {
 test("a drawing Mizan works on has a dot before its name and no words (note 9)", () => {
   const working: TabInfo[] = [{ ...tabs[0], busy: true, status: "working" }, { ...tabs[1], status: "done" }];
   render(<FileTabs tabs={working} active={1} onSelect={() => {}} onClose={() => {}} />);
-  const villa = screen.getAllByRole("tab")[0];
-  const children = [...villa.children].map((el) => el.className || el.tagName);
+  const terminal = screen.getAllByRole("tab")[0];
+  const children = [...terminal.children].map((el) => el.className || el.tagName);
   expect(children[0]).toBe("tab-dot working");
   expect(children[1]).toBe("BDI");
-  expect(villa.textContent).toBe("villa.dwg");
+  expect(terminal.textContent).toBe("terminal.dwg");
   expect(screen.queryByText(/working/i)).toBeNull();
   // Done is a still dot; an idle drawing has none.
   expect(screen.getAllByRole("tab")[1].querySelector(".tab-dot.done")).not.toBeNull();
 });
 
 test("an Arabic file name keeps its extension at its end", () => {
-  render(<FileName name="فيلا صغيرة.dwg" />);
+  render(<FileName name="مطار دولي.dwg" />);
   const outer = document.querySelector("bdi[dir='ltr']")!;
-  expect(outer.firstElementChild?.textContent).toBe("فيلا صغيرة");
+  expect(outer.firstElementChild?.textContent).toBe("مطار دولي");
   expect(outer.lastChild?.textContent).toBe(".dwg");
 });

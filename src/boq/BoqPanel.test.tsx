@@ -8,7 +8,7 @@ import { boqItem, row } from "./testItems";
 afterEach(cleanup);
 
 const boq: Boq = {
-  source: "/jobs/villa/boq.xlsx",
+  source: "/jobs/terminal/boq.xlsx",
   imported: "2026-10-08T00:00:00Z",
   skipped_rows: 2,
   items: [

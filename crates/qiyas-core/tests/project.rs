@@ -51,8 +51,8 @@ fn project_round_trip() {
 #[test]
 fn project_path_rule() {
     assert_eq!(
-        project_path(Path::new("/x/villa.DWG")),
-        PathBuf::from("/x/villa.qiyas")
+        project_path(Path::new("/x/terminal.DWG")),
+        PathBuf::from("/x/terminal.qiyas")
     );
 }
 

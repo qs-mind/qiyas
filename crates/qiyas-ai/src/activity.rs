@@ -794,11 +794,11 @@ mod tests {
         let save = refine(
             crate::surface::EXECUTE,
             &json!({"op":"save_drawing", "args":{}}),
-            &json!({"path":"drawings/Villa.dwg"}),
+            &json!({"path":"drawings/Terminal.dwg"}),
         )
         .detail
         .unwrap();
-        assert_eq!(save.params["file"], "Villa.dwg");
+        assert_eq!(save.params["file"], "Terminal.dwg");
         let no_prose = refine(
             crate::surface::EXECUTE,
             &json!({"op":"export_takeoff", "args":{}}),

@@ -52,7 +52,7 @@ pub(crate) fn named_untitled_path(state: &AppState, name: &str) -> Result<PathBu
         .collect();
     let safe = safe.trim_matches(|c: char| c == '.' || c.is_whitespace());
     if safe.is_empty() {
-        return Err("Give the drawing a name, such as Villa G+1 plans".into());
+        return Err("Give the drawing a name, such as Terminal G+4 plans".into());
     }
     // Windows device names remain reserved even with an extension.
     let stem = safe.split('.').next().unwrap_or(safe).to_ascii_uppercase();

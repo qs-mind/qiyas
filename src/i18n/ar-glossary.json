@@ -716,7 +716,7 @@
     },
     {
       "path": "src/judgement.rs",
-      "text": "ارسم فيلا دورين وطلّع مقايستها",
+      "text": "ارسم طابقاً من مطار دولي وطلّع مقايسته",
       "reason": "Dialectal user-input fixture exercises intent detection, not authored output."
     },
     {

@@ -49,9 +49,9 @@ test("files given at launch open in turn, then files sent later", async () => {
   await act(async () => finish());
   expect(opened).toEqual(["start /d/plan.dwg", "end /d/plan.dwg", "start /d/site.dxf", "end /d/site.dxf"]);
 
-  core.waiting = ["/d/villa.dwg"];
+  core.waiting = ["/d/terminal.dwg"];
   await act(async () => core.listeners.get("open:requested")!());
-  expect(openPath).toHaveBeenLastCalledWith("/d/villa.dwg");
+  expect(openPath).toHaveBeenLastCalledWith("/d/terminal.dwg");
   expect(openPath).toHaveBeenCalledTimes(3);
 });
 

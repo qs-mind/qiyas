@@ -7,7 +7,7 @@ import { RecentsMenu } from "./RecentsMenu";
 afterEach(cleanup);
 
 const list: Recent[] = [
-  { path: "/plans/villa.dwg", name: "villa.dwg", folder: "/plans", missing: false },
+  { path: "/plans/terminal.dwg", name: "terminal.dwg", folder: "/plans", missing: false },
   { path: "/old/gone.dxf", name: "gone.dxf", folder: "/old", missing: true },
 ];
 
@@ -26,14 +26,14 @@ test("Open… opens the dialog; the arrow lists the recent drawings", async () =
   expect(onOpen).toHaveBeenCalled();
 
   fireEvent.click(screen.getByRole("button", { name: "Recent drawings" }));
-  const villa = await screen.findByRole("menuitem", { name: /villa\.dwg/ });
-  expect(villa.textContent).toContain("/plans");
+  const terminal = await screen.findByRole("menuitem", { name: /terminal\.dwg/ });
+  expect(terminal.textContent).toContain("/plans");
   const gone = screen.getByRole("menuitem", { name: /gone\.dxf/ }) as HTMLButtonElement;
   expect(gone.textContent).toContain("(missing)");
   expect(gone.disabled).toBe(true);
 
-  fireEvent.click(villa);
-  expect(onOpenRecent).toHaveBeenCalledWith("/plans/villa.dwg");
+  fireEvent.click(terminal);
+  expect(onOpenRecent).toHaveBeenCalledWith("/plans/terminal.dwg");
   expect(screen.queryByRole("menu")).toBeNull();
 });
 

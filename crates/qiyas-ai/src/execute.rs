@@ -297,8 +297,8 @@ fn execute_with_detail(
         }
         "compare_boq" => {
             let Tolerance { tolerance } = parse(input)?;
-            let tolerance = tolerance.unwrap_or(qiyas_takeoff::DEFAULT_TOLERANCE);
-            let conflicts = qiyas_takeoff::compare_session(session, tolerance, source)?;
+            let tolerance = tolerance.unwrap_or(qiyas_core::discrepancy::DEFAULT_TOLERANCE);
+            let conflicts = qiyas_core::discrepancy::compare_session(session, tolerance, source)?;
             (conflicts_page(&conflicts, 0), 0)
         }
         "list_conflicts" => {

@@ -49,6 +49,10 @@ mod deliverable_trace;
 mod dimension;
 #[path = "discrepancy.rs"]
 mod discrepancy;
+#[path = "discrepancy_compare.rs"]
+mod discrepancy_compare;
+#[path = "discrepancy_generated.rs"]
+mod discrepancy_generated;
 #[path = "draw.rs"]
 mod draw;
 #[path = "drawing_components.rs"]

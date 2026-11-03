@@ -15,7 +15,7 @@ fn item(kind: Kind, value: f64, description: &str) -> Measurement {
 #[test]
 fn export_is_readable_by_calamine() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("villa-takeoff.xlsx");
+    let path = dir.path().join("terminal-takeoff.xlsx");
     let mut takeoff = Takeoff::default();
     let mut boundary = item(Kind::Area, 12.0, "Slab");
     boundary.area_origin = qiyas_core::AreaOrigin::ExistingBoundary;
@@ -44,7 +44,7 @@ fn export_is_readable_by_calamine() {
         &path,
         &takeoff.items,
         &takeoff.totals(),
-        "villa.dwg take-off",
+        "terminal.dwg take-off",
     )
     .unwrap();
 

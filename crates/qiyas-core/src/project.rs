@@ -120,7 +120,7 @@ pub(crate) fn back_up(path: &Path) -> std::io::Result<String> {
     Ok(file_name(&bak))
 }
 
-/// `path` with `suffix` added after its extension, e.g. `villa.dwg` → `villa.dwg.bak`.
+/// `path` with `suffix` added after its extension, e.g. `terminal.dwg` → `terminal.dwg.bak`.
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
@@ -135,12 +135,12 @@ mod tests {
     fn failed_save_removes_the_temp_file() {
         let dir = tempfile::tempdir().unwrap();
         // A non-empty folder where the project should go: the rename fails.
-        let path = dir.path().join("villa.qiyas");
+        let path = dir.path().join("terminal.qiyas");
         std::fs::create_dir(&path).unwrap();
         std::fs::write(path.join("keep"), "").unwrap();
         let project = Project {
             version: 1,
-            drawing: "villa.dwg".to_string(),
+            drawing: "terminal.dwg".to_string(),
             takeoff: Takeoff::default(),
             boq: None,
             conflicts: Vec::new(),
@@ -153,6 +153,6 @@ mod tests {
             ucs: None,
         };
         assert!(save(&path, &project).is_err());
-        assert!(!dir.path().join("villa.qiyas.tmp").exists());
+        assert!(!dir.path().join("terminal.qiyas.tmp").exists());
     }
 }

@@ -8,13 +8,13 @@ test("the project in the title block is the name, the title when there is no pro
   // The Title block command writes the title first, the project under it.
   const both = [
     at("A-ANNO-TTLB", "Ground floor plan", 290),
-    at("A-ANNO-TTLB", "Cairo Villa", 282),
+    at("A-ANNO-TTLB", "Cairo Terminal", 282),
     at("A-ANNO-TTLB", "A-101", 274),
     at("A-ANNO-TTLB", "1:100", 266),
     at("A-ANNO-TTLB", "2026-10-27", 258),
     at("A-ANNO-TEXT", "Majlis", 0),
   ];
-  expect(suggestDrawingName(both, FALLBACK)).toBe("Cairo Villa");
+  expect(suggestDrawingName(both, FALLBACK)).toBe("Cairo Terminal");
   expect(suggestDrawingName([at("A-ANNO-TTLB", "Ground floor plan", 290), at("A-ANNO-TTLB", "A-101", 274)], FALLBACK)).toBe("Ground floor plan");
 });
 
@@ -35,7 +35,7 @@ test("an empty drawing is named by the date, never Untitled", () => {
 });
 
 test("a name is safe for a file: no separators or reserved characters, one line, not too long, no leading dot", () => {
-  expect(fileNameFrom('Villa: "A/B" <final>?')).toBe("Villa A B final");
+  expect(fileNameFrom('Terminal: "A/B" <final>?')).toBe("Terminal A B final");
   expect(fileNameFrom("line one\nline two")).toBe("line one line two");
   expect(fileNameFrom("..hidden. ")).toBe("hidden");
   expect(fileNameFrom("x".repeat(100)).length).toBe(60);
@@ -45,8 +45,8 @@ test("a name is safe for a file: no separators or reserved characters, one line,
 test("a drawing of several layouts repeats its project on each: the line most sheets agree on is the name", () => {
   const sheet = (block: string, title: string) => [
     at("A-ANNO-TTLB", title, 290, block),
-    at("A-ANNO-TTLB", "Cairo Villa", 282, block),
+    at("A-ANNO-TTLB", "Cairo Terminal", 282, block),
   ];
   const texts = [...sheet("*Paper_Space", "Ground floor plan"), ...sheet("*Paper_Space0", "First floor plan"), ...sheet("*Paper_Space1", "Roof plan")];
-  expect(suggestDrawingName(texts, FALLBACK)).toBe("Cairo Villa");
+  expect(suggestDrawingName(texts, FALLBACK)).toBe("Cairo Terminal");
 });

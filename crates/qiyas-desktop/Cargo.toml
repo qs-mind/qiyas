@@ -24,7 +24,6 @@ qiyas-boq = { path = "../qiyas-boq" }
 qiyas-core = { path = "../qiyas-core" }
 qiyas-pdf = { path = "../qiyas-pdf" }
 qiyas-plot = { path = "../qiyas-plot" }
-qiyas-takeoff = { path = "../qiyas-takeoff" }
 tauri = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 serde = { workspace = true }

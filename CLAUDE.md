@@ -18,6 +18,8 @@ Moved here from the team's memory so they live with the code; later sections giv
 - Sheets are tidy: no overlaps, a title block on every sheet, every sheet named (never Untitled), marked for review. Qiyas draws and takes off; loads, design and approval are the engineer's.
 - The ribbon starts collapsed.
 - Examples, demos and tests use mega projects and extreme cases, never a villa or a small building.
+  Saved-data fixtures and their replay/benchmark names stay unchanged, including the logged
+  opening and clinic replays and `samples/test-plan.dwg` with its matching BOQ and generators.
 - Coding work is written as tasks for Codex on the founder's computer; keep the dev app running so it can be tried directly.
 
 Founder's rulings, 2 November 2026:
@@ -55,15 +57,14 @@ Founder's rulings, 2 November 2026:
 qiyas/
   crates/
     qiyas-core      the document: opencadcodec CadDocument in memory, layers, blocks,
-                    layouts, xrefs, selection, snaps, units, undo and redo, command bus, draws
+                    layouts, xrefs, selection, snaps, units, undo and redo, command bus, draws,
+                    BOQ comparison, discrepancies and accuracy reports
     qiyas-geom      2D geometry on top of opencadkernel: offset, trim, fillet, area,
                     length, closed regions, intersections
     qiyas-render    turns the document into GPU buffers: lines, fills, text glyphs,
                     hatches, images; spatial index; dirty tracking per handle
     qiyas-param     parametric constraints: points, radii, curves and their constraints, the
                     damped Gauss-Newton solver (nalgebra), the expression parser
-    qiyas-takeoff   the comparison engine: take-off and drawings against the BOQ
-                    (conflicts); the BOQ, schedule and conflict types live in qiyas-core
     qiyas-boq       Excel in and out (calamine to read, rust_xlsxwriter to write)
     qiyas-pdf       PDF import as vectors and text, PDF underlay pages
     qiyas-ocr       local Arabic and English scan text, boxes and confidence
@@ -233,7 +234,7 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 - Pushing `main` and pushing a `v*` tag are the founder's acts or his explicit ask; CI builds the draft release, and only a human clicks Publish.
 - Run the app: `pnpm tauri dev --config crates/qiyas-desktop/tauri.conf.json`.
 - The `.qiyas` project file is saved next to the drawing after every command.
-- Save keeps a `.bak` of the original drawing (e.g. `villa.dwg.bak`) before writing over it. The
+- Save keeps a `.bak` of the original drawing (e.g. `terminal.dwg.bak`) before writing over it. The
   file leaves out anonymous `*Dn`/`*Tn` blocks nothing uses any more and erased group members
   (`purge_for_save`); the drawing in memory keeps them, so an undo after the save finds them.
 - Autosave writes `<file>.sv$` and `<file>.sv$.qiyas` (`plan.dwg.sv$`) beside a drawing with
@@ -851,9 +852,9 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
 
 - The registry command `discrepancy_check` (its old alias `check` was removed on 2 November 2026: `check` is the read-only drawing check) compares the imported client BOQ with mapped element quantities
   and manual take-off, evaluates drawing knowledge kind `checks`, and raises queries and Comment
-  clouds as one transaction. `qiyas-takeoff::compare` and `compare_session` retain their public
-  API; the shared comparison implementation now lives in `qiyas-core/src/discrepancy/` so the
-  generic command registry, Mizan, desktop and CLI use the same engine.
+  clouds as one transaction. `qiyas_core::discrepancy::{compare, compare_session}` and the
+  accuracy reports live in `qiyas-core/src/discrepancy/`; the registry, Mizan, desktop and CLI
+  use this API directly. Comparator and generated-quantity tests live in core too.
 - `define_check {name,rule}` and `set_knowledge {kind:"checks",name,data}` validate cited rules.
   Rules carry severity and English/Arabic questions. General operations are schedule row joins
   against element counts or summed/per-instance numeric properties, host/property joins, quantity relations between
@@ -2470,12 +2471,12 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   0.05 x 0.05).
 - Offline drafting evaluation: `qiyas-ai/tests/drafting_eval.rs` runs the production Agent
   through the three generic tools using the queued scripted provider shared with
-  `tests/surface.rs` (`tests/support/scripted.rs`). A villa and a flange exercise drafting,
-  checks, stated-intent verification and captures; a synthetic replay checks earlier Mizan
+  `tests/surface.rs` (`tests/support/scripted.rs`). A 120 × 100 m terminal floor and a flange
+  exercise drafting, checks, stated-intent verification and captures; a synthetic replay checks earlier Mizan
   fault classes. This proves the specified tool sequence works, not model judgement or
-  design approval. See `docs/2026-10-20-mizan-drafting-eval.md` for independent quantities,
-  room-boundary limits and the later Claude/Gemini comparison, requiring Kareem's approval
-  for each live run.
+  design approval. Independent quantities are asserted in the tests. Historical room-boundary
+  limits and the later Claude/Gemini comparison are in `docs/2026-10-20-mizan-drafting-eval.md`,
+  requiring Kareem's approval for each live run.
 - Context maintenance counts estimated tokens, not messages. At 60,000 tokens, result/input
   trimming targets 30,000 and requires at least 12,000 tokens cleared in one batch. It keeps
   the first digest, newest four detailed results and their arguments, pending calls, signatures
@@ -2658,7 +2659,7 @@ and Mizan's turn epoch together.
   first"); a dead lock still saves. `Run::warnings` lists the drawings the
   reader repaired (`<path> opened with N problems`).
   Excel and the comparison come through `script::Host` (`qiyas-cli` gives `qiyas-boq` and
-  `qiyas-takeoff`); the window runs the same grammar without it (below).
+  `qiyas_core::discrepancy`); the window runs the same grammar without it (below).
 - Run script (ribbon Manage tab, Run script…, or `SCRIPT` / `SCR`; `qiyas-desktop/src/script.rs`,
   IPC `run_script { path }`): the grammar and folder rule above, run on the drawing on screen
   (none open: the script must OPEN one), each step as the window does it. OPEN opens a tab (or
@@ -3734,7 +3735,7 @@ before a heavy step and never take a timing during a pause.
 What a client gets from Qiyas and Mizan: the notes, the root cause of each and the evidence are in
 `docs/2026-10-27-qiyas-W3.md`. Tests: `crates/qiyas-core/tests/w3_output.rs` (every unit),
 `crates/qiyas-boq/tests/w3_workbook.rs`, and the offline replay `crates/qiyas-ai/tests/w3.rs` (the
-villa request in Arabic through the scripted provider).
+60 × 75 m diagnostic floor of a 20-storey hospital in Arabic through the scripted provider).
 
 - Numbers a client reads (`numbers.rs`): an area or length in text, a label, a schedule cell or a BOQ
   row is shown to two decimals with its unit (`17.81 m²`, `١٧٫٨١ م²`, `14.00 m`); the take-off and the
@@ -3810,7 +3811,7 @@ review of a take-off; every evidence page carries For review / للمراجعة.
   `crates/qiyas-desktop/src/plot.rs` and writes off the session lock. It defaults to
   `<drawing> evidence.pdf` in `Session::export_folder`, beside the BOQ; pass the BOQ's language
   if it had an explicit override. Tests added to `crates/qiyas-plot/tests/plot.rs` cover the W3
-  sample villa's items, both languages, continuation-page notices and the export folder;
+  hospital floor's items, both languages, continuation-page notices and the export folder;
   `crates/qiyas-ai/tests/surface.rs` covers the agent export.
 
 ## Drawing facts and job-owned design limits (3 November 2026)

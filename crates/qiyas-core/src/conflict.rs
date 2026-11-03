@@ -1,5 +1,5 @@
 //! A conflict or gap found by comparing the BOQ, the take-off, the schedules on the drawings and
-//! the block counts (the engine is `qiyas_takeoff::compare`).
+//! the block counts (the engine is `qiyas_core::discrepancy::compare`).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,5 @@
-//! Shared discrepancy engine used by the registry command, desktop and take-off crate.
+//! Shared discrepancy engine used by the registry command, Mizan, desktop and CLI.
+mod accuracy;
 mod compare;
 mod matching;
 pub(crate) mod rules;
@@ -8,11 +9,30 @@ use crate::{
     knowledge, measurement::Citation, Command, Conflict, ConflictKind, ConflictStatus, CoreError,
     Outcome, Session, Source,
 };
+pub use accuracy::{accuracy, net_room_accuracy, Accuracy, NetRoomAccuracy};
 pub use compare::{compare, CompareInputs};
 pub use rules::{CheckRule, Set, TableSource, Test, Tolerance};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+/// No job tolerance means exact comparison, ignoring only binary arithmetic noise.
+pub const DEFAULT_TOLERANCE: f64 = 0.0;
+
+/// Run the shared discrepancy engine and raise drawing queries in one undo step.
+pub fn compare_session(
+    session: &mut Session,
+    default_tol: f64,
+    source: Source,
+) -> Result<Vec<Conflict>, CoreError> {
+    session.run_as(
+        Command::Check {
+            tolerance: Some(default_tol),
+        },
+        source,
+    )?;
+    Ok(session.conflicts.clone())
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -137,7 +157,7 @@ impl Session {
         } else {
             "mizan"
         };
-        let tolerance = tolerance.unwrap_or(0.);
+        let tolerance = tolerance.unwrap_or(DEFAULT_TOLERANCE);
         if !tolerance.is_finite() || tolerance < 0. {
             return Err(invalid("Tolerance must be finite and nonnegative"));
         }

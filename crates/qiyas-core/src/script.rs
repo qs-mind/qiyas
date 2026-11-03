@@ -86,8 +86,7 @@ pub struct ScriptError {
     pub message: String,
 }
 
-/// The Excel and comparison steps, which live outside this crate (`qiyas-boq`, `qiyas-takeoff`):
-/// the program running the script supplies them.
+/// The program running the script supplies Excel I/O and invokes core discrepancy checks.
 pub trait Host {
     fn deliverable(&mut self, _export: &crate::deliverables::Export) -> Result<(), String> {
         Err("This script host does not support deliverables".into())

@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn candidates_follow_the_order() {
-        let folder = Path::new("/jobs/villa");
+        let folder = Path::new("/jobs/terminal");
         let tried = candidates(
             folder,
             "..\\shared\\plan-arch.dwg",
@@ -384,10 +384,10 @@ mod tests {
         );
         let expected: Vec<PathBuf> = [
             "/elsewhere/a.dwg",
-            "/jobs/villa/../shared/plan-arch.dwg",
-            "/jobs/villa/plan-arch.dwg",
-            "/jobs/villa/xrefs/plan-arch.dwg",
-            "/jobs/villa/x-refs/plan-arch.dwg",
+            "/jobs/terminal/../shared/plan-arch.dwg",
+            "/jobs/terminal/plan-arch.dwg",
+            "/jobs/terminal/xrefs/plan-arch.dwg",
+            "/jobs/terminal/x-refs/plan-arch.dwg",
         ]
         .iter()
         .map(PathBuf::from)

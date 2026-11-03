@@ -14,7 +14,7 @@ describe("slash commands", () => {
   });
   it("never opens for ordinary text", () => {
     expect(slashMatches("takeoff", "en")).toEqual([]);
-    expect(slashMatches("/takeoff the villa", "en")).toEqual([]);
+    expect(slashMatches("/takeoff the terminal", "en")).toEqual([]);
     expect(slashMatches("", "en")).toEqual([]);
   });
   it("runs a whole word of either language", () => {

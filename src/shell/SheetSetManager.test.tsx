@@ -17,7 +17,7 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-/** The view the core would give for `set` saved at /jobs/Villa.qss; tower.dwg is missing. */
+/** The view the core would give for `set` saved at /jobs/Terminal.qss; tower.dwg is missing. */
 const viewOf = (set: SheetSet): SheetSetView => ({
   set,
   entries: set.drawings.map((d) => ({
@@ -30,7 +30,7 @@ const viewOf = (set: SheetSet): SheetSetView => ({
 function setup() {
   const api: SheetSetApi = {
     open: vi.fn(async () =>
-      viewOf({ name: "Villa", drawings: [{ path: "plans/ground.dwg", layouts: ["A1"] }] }),
+      viewOf({ name: "Terminal", drawings: [{ path: "plans/ground.dwg", layouts: ["A1"] }] }),
     ),
     save: vi.fn(async (_path: string, set: SheetSet) => viewOf(set)),
     fromTabs: vi.fn(async (_qss: string, name: string) => ({
@@ -44,8 +44,8 @@ function setup() {
       skipped: ["/elsewhere/site.dwg"],
     })),
     entry: vi.fn(async () => ({ path: "roof.dwg", layouts: ["R1"] })),
-    pickNew: vi.fn(async () => "/jobs/Villa.qss"),
-    pickOpen: vi.fn(async () => "/jobs/Villa.qss"),
+    pickNew: vi.fn(async () => "/jobs/Terminal.qss"),
+    pickOpen: vi.fn(async () => "/jobs/Terminal.qss"),
     pickDrawing: vi.fn(async () => "/jobs/roof.dwg"),
   };
   const onOpenAll = vi.fn(async () => {});
@@ -63,7 +63,7 @@ test("a sheet set made from the open drawings is written beside them", async () 
   const { api } = setup();
   fireEvent.click(button("New from open drawings…"));
   await waitFor(() => expect(api.save).toHaveBeenCalled());
-  expect(api.fromTabs).toHaveBeenCalledWith("/jobs/Villa.qss", "Villa");
+  expect(api.fromTabs).toHaveBeenCalledWith("/jobs/Terminal.qss", "Terminal");
   const rows = screen.getAllByRole("listitem");
   expect(rows).toHaveLength(2);
   expect(rows[0].textContent).toContain("plans/ground.dwg");
@@ -80,9 +80,9 @@ test("drawings are added and removed, each change saved; open all opens those fo
 
   fireEvent.click(button("Add drawing…"));
   await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
-  expect(api.entry).toHaveBeenCalledWith("/jobs/Villa.qss", "/jobs/roof.dwg");
-  expect(api.save).toHaveBeenLastCalledWith("/jobs/Villa.qss", {
-    name: "Villa",
+  expect(api.entry).toHaveBeenCalledWith("/jobs/Terminal.qss", "/jobs/roof.dwg");
+  expect(api.save).toHaveBeenLastCalledWith("/jobs/Terminal.qss", {
+    name: "Terminal",
     drawings: [
       { path: "plans/ground.dwg", layouts: ["A1"] },
       { path: "roof.dwg", layouts: ["R1"] },
@@ -91,8 +91,8 @@ test("drawings are added and removed, each change saved; open all opens those fo
 
   fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
   await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
-  expect(api.save).toHaveBeenLastCalledWith("/jobs/Villa.qss", {
-    name: "Villa",
+  expect(api.save).toHaveBeenLastCalledWith("/jobs/Terminal.qss", {
+    name: "Terminal",
     drawings: [{ path: "roof.dwg", layouts: ["R1"] }],
   });
 

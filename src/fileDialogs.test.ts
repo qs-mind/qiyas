@@ -56,13 +56,13 @@ test("an unavailable Documents folder fails before a picker can use the working 
 });
 
 test("Windows folders and a multiple selection keep their platform spelling", async () => {
-  native.drawing.mockResolvedValue({ path: "C:\\Plans\\villa.dwg", untitled: false });
+  native.drawing.mockResolvedValue({ path: "C:\\Plans\\terminal.dwg", untitled: false });
   native.open.mockResolvedValue(["D:\\Images\\one.png", "D:\\Images\\two.png"]);
   await open({ multiple: true });
   expect(native.open).toHaveBeenCalledWith({ multiple: true, defaultPath: "C:\\Plans\\" });
   native.drawing.mockRejectedValue("No drawing is open");
-  await save({ defaultPath: "villa.pdf" });
-  expect(native.save).toHaveBeenCalledWith({ defaultPath: "D:\\Images\\villa.pdf" });
+  await save({ defaultPath: "terminal.pdf" });
+  expect(native.save).toHaveBeenCalledWith({ defaultPath: "D:\\Images\\terminal.pdf" });
 });
 
 test("only the shared helper imports the native dialog plugin", () => {

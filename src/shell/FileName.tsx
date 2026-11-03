@@ -1,4 +1,4 @@
-/** A file name whose extension stays at its end: "فيلا.dwg", never "dwg.فيلا". A single `<bdi>`
+/** A file name whose extension stays at its end: "مطار.dwg", never "dwg.مطار". A single `<bdi>`
  *  takes an Arabic name's direction, which puts the Latin extension before it. */
 export function FileName({ name }: { name: string }) {
   const dot = name.lastIndexOf(".");

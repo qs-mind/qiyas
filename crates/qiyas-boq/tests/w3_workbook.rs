@@ -12,9 +12,10 @@ fn run(s: &mut Session, command: Value) -> Outcome {
     s.run_input(&command, Source::User).unwrap().outcome
 }
 
-fn villa() -> (tempfile::TempDir, Session) {
+// One concourse wall in the terminal opening package.
+fn terminal() -> (tempfile::TempDir, Session) {
     let dir = tempfile::tempdir().unwrap();
-    let mut s = Session::new_blank(&dir.path().join("villa.dwg"), 6);
+    let mut s = Session::new_blank(&dir.path().join("terminal.dwg"), 6);
     run(
         &mut s,
         json!({"type":"walls","runs":[{"points":[[0,0],[20,0]]}],"thickness":0.2,
@@ -106,7 +107,7 @@ fn no_json(sheet: &str, text: &str) {
 
 #[test]
 fn no_visible_sheet_of_a_client_workbook_holds_json_or_ids() {
-    let (dir, s) = villa();
+    let (dir, s) = terminal();
     for language in [Language::En, Language::Ar] {
         for kind in [Kind::Boq, Kind::Dimensions] {
             let report = deliverables::drawing(&s, kind, language, None).unwrap();
@@ -134,7 +135,7 @@ fn no_visible_sheet_of_a_client_workbook_holds_json_or_ids() {
         &path,
         &s.takeoff.items,
         &s.takeoff.totals(),
-        "villa",
+        "terminal",
         &s.measurement_report().unwrap(),
         &s.conflicts,
     )
@@ -146,7 +147,7 @@ fn no_visible_sheet_of_a_client_workbook_holds_json_or_ids() {
 
 #[test]
 fn the_boq_is_itemised_by_size_in_sections_with_no_cross_item_total() {
-    let (dir, s) = villa();
+    let (dir, s) = terminal();
     let report = deliverables::drawing(&s, Kind::Boq, Language::En, None).unwrap();
     let path = dir.path().join("boq.xlsx");
     qiyas_boq::deliverables::write(&Export {
@@ -186,7 +187,7 @@ fn the_boq_is_itemised_by_size_in_sections_with_no_cross_item_total() {
 
 #[test]
 fn every_output_says_it_is_for_review() {
-    let (dir, s) = villa();
+    let (dir, s) = terminal();
     // The BOQ and the dimension sheets, in Excel, in both languages.
     for (language, status) in [
         (Language::En, "Status: For review"),
@@ -235,7 +236,7 @@ fn every_output_says_it_is_for_review() {
         &takeoff,
         &s.takeoff.items,
         &s.takeoff.totals(),
-        "villa",
+        "terminal",
         &s.measurement_report().unwrap(),
         &s.conflicts,
     )

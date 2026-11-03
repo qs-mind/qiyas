@@ -91,10 +91,10 @@ test("the window's own commands act without sending anything: /new starts a chat
 
 test("ordinary text with a slash in it is sent as it is", () => {
   const { assistant, box } = setup();
-  type(box(), "/takeoff the villa");
+  type(box(), "/takeoff the terminal");
   expect(screen.queryByRole("listbox")).toBeNull();
   enter(box());
-  expect(assistant.send).toHaveBeenCalledWith("/takeoff the villa");
+  expect(assistant.send).toHaveBeenCalledWith("/takeoff the terminal");
 });
 
 test("in the Arabic window the commands are Arabic words, and an English word typed whole still runs", () => {

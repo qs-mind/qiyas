@@ -1,5 +1,5 @@
 //! W3: what Mizan hands a client, replayed offline with a scripted provider (no model, no
-//! network). The founder's villa request in Arabic: walls and openings, rooms, tags, an
+//! network). A hospital request in Arabic: walls and openings, rooms, tags, an
 //! itemised BOQ, a real sheet, schedules, a plot and the exports. The replay shows the result
 //! is clean: two-decimal areas with units, no ids on a sheet, tagged openings, totals per kind,
 //! doors by size, one export folder, and a layout at a true scale with a filled title block.
@@ -109,7 +109,7 @@ fn texts_on(s: &Session, block: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
+async fn the_hospital_request_in_arabic_gives_a_clean_client_package() {
     let dir = tempfile::tempdir().unwrap();
     // The app's hidden placeholder folder and the visible Documents folder.
     let hidden = dir.path().join("config").join("untitled");
@@ -120,7 +120,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
     session.set_export_directory(documents.clone());
     let session: Shared = Arc::new(Mutex::new(Some(session)));
 
-    let cite = json!({"source":"Villa assumptions","clause":"1"});
+    let cite = json!({"source":"Hospital assumptions","clause":"1"});
     let count = |id: &str, element: &str| {
         json!({"id":id,"kind":"count","basis":"geometric","element_type":element,"unit":"pcs",
             "terms":[{"label":"Count","operation":"add","factors":["pieces"],"citation":cite}],
@@ -137,16 +137,16 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         // The plan: an outer ring, one partition, doors and windows of three sizes.
         Reply::Calls(vec![run(
             json!({"type":"walls","thickness":0.2,"height":3.0,
-            "runs":[{"points":[[0,0],[12,0],[12,15],[0,15]],"closed":true},{"points":[[0,7.5],[12,7.5]]}],
+            "runs":[{"points":[[0,0],[60,0],[60,75],[0,75]],"closed":true},{"points":[[0,37.5],[60,37.5]]}],
             "openings":[{"run":0,"at":2,"width":0.9,"kind":"door"},
                         {"run":0,"at":6,"width":1.2,"kind":"window"},
                         {"run":0,"at":9,"width":1.0,"kind":"door"},
-                        {"run":0,"at":18,"width":1.2,"kind":"window"},
+                        {"run":0,"at":90,"width":1.2,"kind":"window"},
                         {"run":1,"at":3,"width":0.9,"kind":"door"}]}),
         )]),
         // Rooms, without a word about language: the user wrote Arabic.
         Reply::Calls(vec![run(json!({"type":"label_spaces","query":{"seeds":[
-            {"name":"Living","point":[3,3]},{"name":"Bedroom","point":[3,10]}]}}))]),
+            {"name":"Diagnostics","point":[15,15]},{"name":"Treatment","point":[15,50]}]}}))]),
         // Tags for every door and window, in one step.
         Reply::Calls(vec![run(
             json!({"type":"object_tags","category":"opening","property":"mark"}),
@@ -169,7 +169,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         Reply::Calls(vec![plan(2)]),
         Reply::Calls(vec![run(
             json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
-                "version":1,"name":"Villa geometric quantities","title":"Villa","based_on":"drawing","source_note":"Villa assumptions",
+                "version":1,"name":"Hospital geometric quantities","title":"Hospital","based_on":"drawing","source_note":"Hospital assumptions",
                 "rules":[count("doors","Legacy door"),count("windows","Legacy window")]}}),
         )]),
         Reply::Calls(vec![read(
@@ -179,7 +179,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         Reply::Calls(vec![plan(3)]),
         // The sheet, in one step.
         Reply::Calls(vec![run(json!({"type":"make_sheet","name":"A-101",
-            "project":"فيلا القاهرة","title":"المسقط الأفقي","drawing_no":"A-101",
+            "project":"مستشفى القاهرة","title":"المسقط الأفقي","drawing_no":"A-101",
             "notes":["الأبعاد بالمتر.","الافتراضات للمراجعة."]}))]),
         // Schedules on the sheet, then back to the model.
         Reply::Then(Box::new(|s| {
@@ -202,10 +202,10 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
         Reply::Calls(vec![exec("plot", json!({}))]),
         Reply::Calls(vec![exec(
             "export_takeoff",
-            json!({"path":"Villa DRAFT take-off.xlsx"}),
+            json!({"path":"Hospital DRAFT take-off.xlsx"}),
         )]),
         Reply::Calls(vec![run(
-            json!({"type":"deliverable","kind":"export","report":"boq","format":"excel","path":"Villa_BOQ.xlsx"}),
+            json!({"type":"deliverable","kind":"export","report":"boq","format":"excel","path":"Hospital_BOQ.xlsx"}),
         )]),
         Reply::Calls(vec![read("check", json!({}))]),
         Reply::Calls(vec![plan(4)]),
@@ -222,7 +222,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
     let (tx, mut rx) = mpsc::channel(10_000);
     agent
         .run_turn(
-            "ارسم فيلا دورين وطلّع مقايستها".to_string(),
+            "ارسم طابق التشخيص 60 × 75 م في مستشفى من 20 طابقاً وطلّع مقايسته".to_string(),
             tx,
             CancellationToken::new(),
         )
@@ -296,7 +296,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
     let sheet = texts_on(s, &block);
     let all = sheet.join("|");
     for must in [
-        "فيلا القاهرة",
+        "مستشفى القاهرة",
         "المسقط الأفقي",
         "A-101",
         "للمراجعة",
@@ -377,7 +377,7 @@ async fn the_villa_request_in_arabic_gives_a_clean_client_package() {
     assert!(
         names
             .iter()
-            .any(|name| name == "Villa_BOQ.xlsx" || name == "DRAFT Villa_BOQ.xlsx"),
+            .any(|name| name == "Hospital_BOQ.xlsx" || name == "DRAFT Hospital_BOQ.xlsx"),
         "{names:?}"
     );
     let hidden_files = std::fs::read_dir(&hidden).unwrap().count();

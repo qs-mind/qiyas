@@ -477,9 +477,13 @@ impl Host for Excel {
     }
 
     fn compare(&mut self, session: &mut Session) -> Result<usize, String> {
-        qiyas_takeoff::compare_session(session, qiyas_takeoff::DEFAULT_TOLERANCE, Source::User)
-            .map(|conflicts| conflicts.len())
-            .map_err(|e| e.to_string())
+        qiyas_core::discrepancy::compare_session(
+            session,
+            qiyas_core::discrepancy::DEFAULT_TOLERANCE,
+            Source::User,
+        )
+        .map(|conflicts| conflicts.len())
+        .map_err(|e| e.to_string())
     }
 
     fn allow_repaired_save(&self) -> bool {

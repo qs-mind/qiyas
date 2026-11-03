@@ -1,4 +1,4 @@
-//! A second villa evaluation deliberately recovers from an opening refused at a junction.
+//! A second terminal evaluation deliberately recovers from an opening refused at a junction.
 //! Every decision reads the conversation, including handles and the offered fitting ranges.
 
 use super::*;
@@ -9,7 +9,7 @@ use qiyas_core::Source;
 const PHASES: [(&str, &str); 8] = [
     (
         "plan",
-        "12 x 10 m; four 6 x 5 m centreline bays; 250/150 mm walls",
+        "120 x 100 m; four 60 x 50 m centreline bays; 250/150 mm walls",
     ),
     ("grid", "Grid"),
     ("outer", "Outer walls"),
@@ -92,7 +92,7 @@ fn window_at_junction(request: &TurnRequest) -> (&'static str, Value) {
             "run",
             json!({"command": {
                 "type": "add_wall_openings", "centreline": groups[0]["runs"][0]["centreline"],
-                "openings": [{"at": 6, "width": 1.2, "kind": "window"}]
+                "openings": [{"at": 60, "width": 1.2, "kind": "window"}]
             }}),
         ),
     )
@@ -124,7 +124,7 @@ fn partition_door(request: &TurnRequest) -> (&'static str, Value) {
             "run",
             json!({"command": {
                 "type": "add_wall_openings", "centreline": groups[0]["runs"][1]["centreline"],
-                "openings": [{"at": 2.5, "width": 0.9, "kind": "door"}]
+                "openings": [{"at": 25, "width": 0.9, "kind": "door"}]
             }}),
         ),
     )
@@ -140,10 +140,10 @@ fn verify(request: &TurnRequest) -> (&'static str, Value) {
             "run",
             json!({"command": {
                 "type":"verify", "expectations": [
-                    {"kind":"distance","targets":pair,"points":[[0,0],[12,0]],"value":12,"in_metres":true},
-                    {"kind":"distance","targets":pair,"points":[[0,0],[0,10]],"value":10,"in_metres":true},
+                    {"kind":"distance","targets":pair,"points":[[0,0],[120,0]],"value":120,"in_metres":true},
+                    {"kind":"distance","targets":pair,"points":[[0,0],[0,100]],"value":100,"in_metres":true},
                     {"kind":"closed","targets":[{"handle":outer}]},
-                    {"kind":"area","targets":targets(&walls["hatches"]),"value":13.7675,"tolerance":1e-6,"in_metres":true},
+                    {"kind":"area","targets":targets(&walls["hatches"]),"value":142.4675,"tolerance":1e-6,"in_metres":true},
                     {"kind":"count","layer":"GRID","entity_type":"Line","value":6},
                     {"kind":"count","layer":"A-ROOM-NAME","entity_type":"Text","value":4},
                     {"kind":"count","layer":"A-DOOR","entity_type":"Insert","value":1},
@@ -186,10 +186,10 @@ fn surface_command(session: &mut Session, command: Value) -> Value {
 }
 
 #[tokio::test]
-async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
-    let outer = json!({"points":[[0,0],[12,0],[12,10],[0,10]],"closed":true});
-    let vertical = json!({"points":[[6,0],[6,10]],"thickness":0.15});
-    let horizontal = json!({"points":[[0,5],[12,5]],"thickness":0.15});
+async fn terminal_in_phases_joins_walls_and_recovers_using_the_wall_read() {
+    let outer = json!({"points":[[0,0],[120,0],[120,100],[0,100]],"closed":true});
+    let vertical = json!({"points":[[60,0],[60,100]],"thickness":0.15});
+    let horizontal = json!({"points":[[0,50],[120,50]],"thickness":0.15});
     let mut steps = vec![
         call(READ, "state", json!({})),
         phase(0),
@@ -200,9 +200,9 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
         ),
         phase(1),
         run(json!({"type":"grid",
-            "x":[{"label":"A","at":0},{"label":"B","at":6},{"label":"C","at":12}],
-            "y":[{"label":"1","at":0},{"label":"2","at":5},{"label":"3","at":10}],
-            "extent":{"min":[-1,-1],"max":[13,11]}
+            "x":[{"label":"A","at":0},{"label":"B","at":60},{"label":"C","at":120}],
+            "y":[{"label":"1","at":0},{"label":"2","at":50},{"label":"3","at":100}],
+            "extent":{"min":[-3,-3],"max":[123,103]}
         })),
     ];
     inspect(&mut steps);
@@ -232,7 +232,7 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
             "A-ROOM-NAME",
             ROOMS
                 .iter()
-                .zip([[1.0, 2.5], [7.0, 2.5], [1.0, 7.5], [7.0, 7.5]])
+                .zip([[10.0, 25.0], [70.0, 25.0], [10.0, 75.0], [70.0, 75.0]])
                 .map(|(value, at)| json!({"type":"text","value":value,"at":at}))
                 .collect(),
         ),
@@ -258,11 +258,11 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
     let (tx, mut rx) = mpsc::channel(1_000);
     agent
         .run_turn(
-            "Draft a 12 x 10 m villa with four 6 x 5 m centreline bays. Outer walls 250 mm, \
+            "Draft a 120 x 100 m terminal with four 60 x 50 m centreline bays. Outer walls 250 mm, \
         partitions 150 mm, all 3 m high. Work in phases and check after each. Draw grid axes on \
-        the wall centrelines at x=0,6,12 and y=0,5,10, extending around the walls. Add one 1200 mm \
+        the wall centrelines at x=0,60,120 and y=0,50,100, extending around the walls. Add one 1200 mm \
         window and one 900 mm partition door, then name the rooms. Dimensions, table and sheet \
-        are covered by the original villa evaluation; mark those phases skipped here."
+        are covered by the original terminal evaluation; mark those phases skipped here."
                 .into(),
             tx.clone(),
             CancellationToken::new(),
@@ -393,7 +393,7 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
         json!({"type":"walls","thickness":0.25,
         "runs":[outer,vertical,horizontal],"openings":[
             {"run":0,"at":window_at,"width":1.2,"kind":"window"},
-            {"run":1,"at":2.5,"width":0.9,"kind":"door"}
+            {"run":1,"at":25,"width":0.9,"kind":"door"}
         ]}),
     );
     let actual = &results
@@ -401,11 +401,11 @@ async fn villa_in_phases_joins_walls_and_recovers_using_the_wall_read() {
         .rev()
         .find(|v| v["command"] == "add_wall_openings")
         .unwrap()["outcome"];
-    // Outer ring: 12.25*10.25 - 11.75*9.75 = 11 m². Partitions: .15*(9.75+11.75)-.15².
+    // Outer ring: 120.25*100.25 - 119.75*99.75 = 110 m². Partitions: .15*(99.75+119.75)-.15².
     // Openings remove .25*1.2 + .15*.9; void heights are 1.2 m and 2.1 m respectively.
-    near(&actual["gross_area"], 14.2025);
-    near(&actual["net_area"], 13.7675);
-    near(&actual["volume"], 41.964);
+    near(&actual["gross_area"], 142.9025);
+    near(&actual["net_area"], 142.4675);
+    near(&actual["volume"], 428.064);
     for field in ["centreline_length", "gross_area", "net_area", "volume"] {
         near(&actual[field], expected["outcome"][field].as_f64().unwrap());
     }

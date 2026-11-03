@@ -9,7 +9,7 @@ import { QuestionList, answerText } from "./QuestionList";
 afterEach(cleanup);
 
 const one: Question[] = [{
-  id: "q1", question: "Which country’s codes govern this villa?", allow_other: true,
+  id: "q1", question: "Which country’s codes govern this terminal?", allow_other: true,
   options: [{ label: "Egypt", description: "Matches the Arabic text on the drawing", recommended: true }, { label: "Saudi Arabia" }, { label: "UAE" }],
 }];
 const two: Question[] = [...one, { id: "q2", question: "Which finish?", allow_other: false, options: [{ label: "Standard" }, { label: "High-end" }] }];

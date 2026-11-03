@@ -1,8 +1,8 @@
+use qiyas_core::discrepancy::{compare, CompareInputs};
 use qiyas_core::{
     BlockCount, Boq, BoqItem, Conflict, ConflictKind, ConflictStatus, Kind, Measurement, Schedule,
     Takeoff, Units,
 };
-use qiyas_takeoff::{compare, CompareInputs};
 
 fn item(code: &str, description: &str, unit: &str, quantity: f64) -> BoqItem {
     BoqItem {
@@ -573,7 +573,7 @@ fn no_job_tolerance_compares_exactly_and_an_explicit_tolerance_can_allow_differe
             blocks: &[],
             units_label: "metres",
         };
-        let conflicts = compare(&inputs, qiyas_takeoff::DEFAULT_TOLERANCE, &[]);
+        let conflicts = compare(&inputs, qiyas_core::discrepancy::DEFAULT_TOLERANCE, &[]);
         assert_eq!(
             of_kind(&conflicts, ConflictKind::QuantityMismatch).is_empty(),
             measured == 10000.0
@@ -600,7 +600,7 @@ fn exact_comparison_ignores_arithmetic_noise_but_detects_a_hundredth() {
             blocks: &[],
             units_label: "metres",
         };
-        let conflicts = compare(&inputs, qiyas_takeoff::DEFAULT_TOLERANCE, &[]);
+        let conflicts = compare(&inputs, qiyas_core::discrepancy::DEFAULT_TOLERANCE, &[]);
         assert_eq!(
             of_kind(&conflicts, ConflictKind::QuantityMismatch).len(),
             mismatch_count

@@ -46,7 +46,7 @@ fn fixture(s: &mut Session, k: f64) -> (u64, u64, u64) {
 #[test]
 fn given_parts_keep_geometry_and_order_and_undo_as_one_step() {
     let dir = tempfile::tempdir().unwrap();
-    let mut s = Session::new_blank(&dir.path().join("Villa.dwg"), 6);
+    let mut s = Session::new_blank(&dir.path().join("Terminal.dwg"), 6);
     let (plan, label, table) = fixture(&mut s, 1.0);
     let before: Vec<_> = [plan, label, table].map(|h| points(&s, h)).into();
     let steps = s.history_steps().0.len();
@@ -84,7 +84,7 @@ fn given_parts_keep_geometry_and_order_and_undo_as_one_step() {
 fn automatic_parts_find_a_table_inside_a_plan_and_separate_it_in_every_unit() {
     for units in [4, 5, 6, 1] {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Session::new_blank(&dir.path().join("Villa.dwg"), units);
+        let mut s = Session::new_blank(&dir.path().join("Terminal.dwg"), units);
         let k = 1.0 / s.drawing.units.to_metres();
         run(&mut s, json!({"type":"annotation_scale","name":"1:100"}));
         let (plan, label, table) = fixture(&mut s, k);
@@ -120,7 +120,7 @@ fn automatic_parts_find_a_table_inside_a_plan_and_separate_it_in_every_unit() {
 #[test]
 fn arranging_only_a_table_finds_space_without_moving_the_plan() {
     let dir = tempfile::tempdir().unwrap();
-    let mut s = Session::new_blank(&dir.path().join("Villa.dwg"), 6);
+    let mut s = Session::new_blank(&dir.path().join("Terminal.dwg"), 6);
     let (plan, label, table) = fixture(&mut s, 1.0);
     let before = [points(&s, plan), points(&s, label)];
     run(
@@ -132,7 +132,7 @@ fn arranging_only_a_table_finds_space_without_moving_the_plan() {
 }
 
 #[test]
-/// Line work whose extents overlap is one plan (a villa's outer and inner wall rings overlap
+/// Line work whose extents overlap is one plan (a terminal's outer and inner wall rings overlap
 /// without one containing the other); a plan stacked on another can be split with items.
 fn overlapping_line_work_is_one_part_and_items_split_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -216,7 +216,7 @@ fn a_content_sheet_needs_a_title_block_and_arrange_keeps_it_clear() {
     );
     let title = match run(
         &mut s,
-        json!({"type":"title_block","fields":{"title":"Villa plans"}}),
+        json!({"type":"title_block","fields":{"title":"Terminal plans"}}),
     ) {
         Outcome::TitleBlock { handles, .. } => handles,
         other => panic!("{other:?}"),
@@ -259,7 +259,7 @@ fn export_defaults_use_the_export_folder_and_keep_previous_names() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().join("exports");
     std::fs::create_dir_all(&folder).unwrap();
-    let mut s = Session::new_blank(&dir.path().join("Villa plans.dwg"), 6);
+    let mut s = Session::new_blank(&dir.path().join("Terminal plans.dwg"), 6);
     s.set_export_directory(folder.clone());
     let prepare = |s: &mut Session| match run(
         s,
@@ -269,10 +269,10 @@ fn export_defaults_use_the_export_folder_and_keep_previous_names() {
         other => panic!("{other:?}"),
     };
     let first = prepare(&mut s);
-    assert_eq!(first.path, folder.join("Villa plans - Register.xlsx"));
+    assert_eq!(first.path, folder.join("Terminal plans - Register.xlsx"));
     std::fs::write(&first.path, "previous export").unwrap();
     let second = prepare(&mut s);
-    assert_eq!(second.path, folder.join("Villa plans - Register 2.xlsx"));
+    assert_eq!(second.path, folder.join("Terminal plans - Register 2.xlsx"));
     assert_eq!(
         std::fs::read_to_string(&first.path).unwrap(),
         "previous export"

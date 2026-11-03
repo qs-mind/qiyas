@@ -10,7 +10,6 @@ rust-version.workspace = true
 [dependencies]
 qiyas-core = { path = "../qiyas-core" }
 qiyas-boq = { path = "../qiyas-boq" }
-qiyas-takeoff = { path = "../qiyas-takeoff" }
 qiyas-ai = { path = "../qiyas-ai" }
 qiyas-plot = { path = "../qiyas-plot" }
 qiyas-pdf = { path = "../qiyas-pdf" }

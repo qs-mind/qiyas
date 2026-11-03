@@ -392,10 +392,10 @@ mod tests {
             assert!(wants_to_continue(text), "{text}");
         }
         for text in [
-            "Draw a villa",
-            "ارسم فيلا دورين وطلّع مقايستها",
+            "Draw a terminal",
+            "ارسم طابقاً من مطار دولي وطلّع مقايسته",
             "Cairo",
-            "Draw a villa, keep it simple",
+            "Draw a terminal, keep it simple",
             "Complete the kitchen layout",
             "What does the continue command do in this long sentence about something unrelated to resuming work at all today",
         ] {

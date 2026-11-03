@@ -780,7 +780,7 @@ async fn an_answer_cut_off_before_it_said_anything_is_asked_again_with_more_room
             session,
             AgentSettings::default(),
         );
-        let (result, events) = turn(&mut agent, "Draw the villa.").await;
+        let (result, events) = turn(&mut agent, "Draw the terminal.").await;
         result.unwrap();
         let reqs = mock.requests();
         assert_eq!(reqs.len(), 2, "asked again");
@@ -816,7 +816,7 @@ async fn an_answer_that_keeps_running_out_stops_at_the_cap() {
             session,
             AgentSettings::default(),
         );
-        let (_result, events) = turn(&mut agent, "Draw the villa.").await;
+        let (_result, events) = turn(&mut agent, "Draw the terminal.").await;
         let sizes: Vec<_> = mock
             .requests()
             .iter()
@@ -1644,7 +1644,7 @@ async fn a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_
                 (
                     "toolu_4",
                     "qiyas_execute",
-                    &[r#"{"op":"open_drawing","args":{"path":"/jobs/villa.dwg"}}"#],
+                    &[r#"{"op":"open_drawing","args":{"path":"/jobs/terminal.dwg"}}"#],
                 ),
             ]),
             _ => text_turn(&["Drawn; choose where to save it."]),
@@ -1691,7 +1691,7 @@ async fn a_new_drawing_made_mid_turn_is_drawn_on_in_the_same_turn_and_save_asks_
         // The path was not in the user's message, so it is not counted as named by the user.
         assert_eq!(
             *host.calls.lock().unwrap(),
-            ["new m", "save", "open /jobs/villa.dwg false"]
+            ["new m", "save", "open /jobs/terminal.dwg false"]
         );
     })
     .await

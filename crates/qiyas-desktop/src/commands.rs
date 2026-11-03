@@ -814,9 +814,9 @@ pub async fn compare(
     state: State<'_, AppState>,
 ) -> Result<Vec<Conflict>, String> {
     let state = state.scoped(workspace)?;
-    let tolerance = tolerance_default.unwrap_or(qiyas_takeoff::DEFAULT_TOLERANCE);
+    let tolerance = tolerance_default.unwrap_or(qiyas_core::discrepancy::DEFAULT_TOLERANCE);
     with_session(&state, |s| {
-        qiyas_takeoff::compare_session(s, tolerance, Source::User)
+        qiyas_core::discrepancy::compare_session(s, tolerance, Source::User)
     })
 }
 
@@ -2788,7 +2788,7 @@ mod tests {
                     history.as_array().unwrap().len(),
                     before.as_array().unwrap().len() + 2
                 );
-                let saved = ipc._dir.path().join("villa.dwg");
+                let saved = ipc._dir.path().join("terminal.dwg");
                 ipc.call("save_drawing_as", json!({"path":saved})).unwrap();
                 let after = ipc
                     .call("ai_conversations", json!({"drawing":saved}))

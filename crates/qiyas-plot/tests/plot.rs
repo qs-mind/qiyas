@@ -1026,7 +1026,7 @@ fn an_untitled_drawing_plots_into_the_export_folder_not_its_hidden_placeholder_f
     .unwrap();
     // Named and unnamed, the PDF goes where the workbooks go; the full path comes back.
     let mut named = job(MODEL);
-    named.output = Some("Villa_Plans.pdf".into());
+    named.output = Some("Hospital_Plans.pdf".into());
     let out = plot_pdf(&s, &named).unwrap();
     assert_eq!(
         out.path.parent().unwrap(),
@@ -1041,24 +1041,24 @@ fn an_untitled_drawing_plots_into_the_export_folder_not_its_hidden_placeholder_f
     assert_eq!(std::fs::read_dir(&hidden).unwrap().count(), 0);
 }
 
-// W6: the same 12 x 15 m villa and opening sizes used by the W3 offline replay.
-fn evidence_villa(long_description: bool) -> (tempfile::TempDir, Session) {
+// W6: the same 60 x 75 m hospital diagnostic floor and opening sizes used by the W3 offline replay.
+fn evidence_hospital(long_description: bool) -> (tempfile::TempDir, Session) {
     let dir = tempfile::tempdir().unwrap();
-    let mut s = Session::new_blank(&dir.path().join("villa.dwg"), 6);
+    let mut s = Session::new_blank(&dir.path().join("hospital.dwg"), 6);
     let mut run = |command| {
         s.run_input(&command, qiyas_core::Source::User).unwrap();
     };
     run(json!({"type":"walls","thickness":0.2,"height":3.0,
-        "runs":[{"points":[[0,0],[12,0],[12,15],[0,15]],"closed":true},
-                {"points":[[0,7.5],[12,7.5]]}],
+        "runs":[{"points":[[0,0],[60,0],[60,75],[0,75]],"closed":true},
+                {"points":[[0,37.5],[60,37.5]]}],
         "openings":[{"run":0,"at":2,"width":0.9,"kind":"door"},
                     {"run":0,"at":6,"width":1.2,"kind":"window"},
                     {"run":0,"at":9,"width":1.0,"kind":"door"},
-                    {"run":0,"at":18,"width":1.2,"kind":"window"},
+                    {"run":0,"at":90,"width":1.2,"kind":"window"},
                     {"run":1,"at":3,"width":0.9,"kind":"door"}]}));
-    let citation = json!({"source":"Villa assumptions","clause":"1"});
+    let citation = json!({"source":"Hospital assumptions","clause":"1"});
     let description = if long_description {
-        "Doors for the villa, including frame and ironmongery. ".repeat(160)
+        "Doors for the hospital, including frame and ironmongery. ".repeat(160)
     } else {
         "Doors, various sizes".into()
     };
@@ -1077,8 +1077,8 @@ fn evidence_villa(long_description: bool) -> (tempfile::TempDir, Session) {
     };
     run(
         json!({"type":"measurement","kind":"set_method","scope":"settings","method":{
-        "version":1,"name":"Villa geometric quantities","title":"Villa","based_on":"drawing",
-        "source_note":"Villa assumptions","rules":[count("doors","Legacy door"),count("windows","Legacy window")]}}),
+        "version":1,"name":"Hospital geometric quantities","title":"Hospital","based_on":"drawing",
+        "source_note":"Hospital assumptions","rules":[count("doors","Legacy door"),count("windows","Legacy window")]}}),
     );
     (dir, s)
 }
@@ -1131,13 +1131,13 @@ fn evidence_text(doc: &lopdf::Document, page: lopdf::ObjectId) -> String {
 }
 
 #[test]
-fn villa_evidence_marks_every_boq_item_beside_the_boq_in_its_language() {
+fn hospital_evidence_marks_every_boq_item_beside_the_boq_in_its_language() {
     use qiyas_core::deliverables::{self, Kind, Language};
     for language in [Language::En, Language::Ar] {
-        let (_dir, s) = evidence_villa(false);
+        let (_dir, s) = evidence_hospital(false);
         let boq = deliverables::drawing(&s, Kind::Boq, language, None).unwrap();
         assert_eq!(boq.rows.len(), 3, "two door sizes and one window size");
-        let boq_path = s.export_folder().join("villa boq.pdf");
+        let boq_path = s.export_folder().join("hospital boq.pdf");
         qiyas_plot::report::write(&boq_path, &boq).unwrap();
         let before = s.history_steps();
         let out = qiyas_plot::evidence::export(&s, None, language).unwrap();
@@ -1203,7 +1203,7 @@ fn villa_evidence_marks_every_boq_item_beside_the_boq_in_its_language() {
 
 #[test]
 fn every_evidence_continuation_page_carries_for_review_and_the_drawing() {
-    let (_dir, s) = evidence_villa(true);
+    let (_dir, s) = evidence_hospital(true);
     let out =
         qiyas_plot::evidence::export(&s, None, qiyas_core::deliverables::Language::En).unwrap();
     let doc = lopdf::Document::load(&out.path).unwrap();
@@ -1219,7 +1219,7 @@ fn every_evidence_continuation_page_carries_for_review_and_the_drawing() {
 
 #[test]
 fn evidence_uses_the_boq_export_folder_for_an_untitled_drawing() {
-    let (dir, mut s) = evidence_villa(false);
+    let (dir, mut s) = evidence_hospital(false);
     let documents = dir.path().join("Documents");
     std::fs::create_dir(&documents).unwrap();
     s.set_export_directory(documents.clone());
@@ -1231,7 +1231,7 @@ fn evidence_uses_the_boq_export_folder_for_an_untitled_drawing() {
 
 #[test]
 fn evidence_includes_each_sheet_that_has_measured_elements() {
-    let (_dir, mut s) = evidence_villa(false);
+    let (_dir, mut s) = evidence_hospital(false);
     s.run(Command::NewLayout {
         name: "Upper floor".into(),
         paper: "ISO A3".into(),

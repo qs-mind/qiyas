@@ -227,14 +227,14 @@ fn the_grid_is_a_metre_in_every_unit() {
     }
 }
 
-/// The villa a tester drew in metres: the drawing's style was the codec's stock one (text 0.18,
+/// The terminal a tester drew in metres: the drawing's style was the codec's stock one (text 0.18,
 /// offset 0.625, extension 1.25), so at 1:100 its dimensions were 18 m tall with 125 m
 /// extension lines. Opened again, the style takes the metric template's sizes and the dimension
 /// Qiyas made is drawn again: text 0.25 m.
 #[test]
 fn a_stock_dimension_style_is_sized_on_open_and_its_giant_dimensions_redrawn() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("villa.dwg");
+    let path = dir.path().join("terminal.dwg");
     let mut s = Session::new_blank(&dir.path().join("Untitled-1.dwg"), 6);
     // Back to the stock style, as the drawing had it.
     s.run(Command::SetDimStyle {

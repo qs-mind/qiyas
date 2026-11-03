@@ -1,4 +1,4 @@
-#[path = "../../qiyas-core/tests/support/measurement_fixture.rs"]
+#[path = "support/measurement_fixture.rs"]
 mod fixture;
 use qiyas_core::{Boq, BoqItem, Command, ConflictKind, Session, Source};
 use serde_json::json;
@@ -23,14 +23,16 @@ fn generated_boq_compares_to_import_and_changes_after_edit_without_overwriting_i
         0,
     );
     s.run(Command::SetBoq { boq: boq.clone() }).unwrap();
-    assert!(qiyas_takeoff::compare_session(&mut s, 2.0, Source::User)
-        .unwrap()
-        .is_empty());
+    assert!(
+        qiyas_core::discrepancy::compare_session(&mut s, 2.0, Source::User)
+            .unwrap()
+            .is_empty()
+    );
     fixture::run(
         &mut s,
         json!({"type":"set_object_props","targets":[host],"props":{"copies":2}}),
     );
-    let conflicts = qiyas_takeoff::compare_session(&mut s, 2.0, Source::User).unwrap();
+    let conflicts = qiyas_core::discrepancy::compare_session(&mut s, 2.0, Source::User).unwrap();
     assert!(conflicts
         .iter()
         .any(|c| c.kind == ConflictKind::QuantityMismatch));

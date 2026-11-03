@@ -20,7 +20,6 @@ qiyas-pdf = { path = "../qiyas-pdf" }
 qiyas-ocr = { path = "../qiyas-ocr" }
 qiyas-plot = { path = "../qiyas-plot" }
 qiyas-render = { path = "../qiyas-render" }
-qiyas-takeoff = { path = "../qiyas-takeoff" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

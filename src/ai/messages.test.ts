@@ -274,12 +274,12 @@ test("a question event keeps every question with its options, and the answer is 
     { id: "q2", question: "Finishes?", allow_other: true, options: [{ label: "Standard", description: "Ceramic floors" }, { label: "High-end" }] },
   ];
   const transcript = run([
-    { type: "user", text: "Design a villa package" },
+    { type: "user", text: "Design a terminal package" },
     { type: "text", text: "I need two answers." },
     { type: "question", questions },
   ]);
   expect(transcript.items).toEqual([
-    { kind: "user", text: "Design a villa package" },
+    { kind: "user", text: "Design a terminal package" },
     { kind: "assistant", text: "I need two answers.", finished: true },
     { kind: "question", questions },
   ]);

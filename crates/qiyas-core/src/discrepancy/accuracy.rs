@@ -1,5 +1,5 @@
 //! Independent accuracy verdicts. Never combine count, geometry and net-room denominators.
-use qiyas_core::{Kind, Measurement, MeasurementBasis};
+use crate::{Kind, Measurement, MeasurementBasis};
 
 #[derive(Debug, PartialEq)]
 pub struct Accuracy {
@@ -79,7 +79,7 @@ pub fn net_room_accuracy<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qiyas_core::Units;
+    use crate::Units;
 
     #[test]
     fn absolute_relative_integer_zero_and_rounding_have_separate_verdicts() {

@@ -894,8 +894,8 @@ mod tests {
     fn named_drawings_keep_arabic_and_choose_unused_names() {
         let (_dir, app) = app();
         let state = app.state::<AppState>();
-        let path = tabs::named_untitled_path(&state, "  فيلا G+1: plans /?*<>|\\\"  ").unwrap();
-        assert_eq!(path.file_name().unwrap(), "فيلا G+1 plans.dwg");
+        let path = tabs::named_untitled_path(&state, "  مطار G+4: plans /?*<>|\\\"  ").unwrap();
+        assert_eq!(path.file_name().unwrap(), "مطار G+4 plans.dwg");
         assert_eq!(path.parent().unwrap(), state.config_dir.join("untitled"));
         assert!(tabs::named_untitled_path(&state, " ").is_err());
         assert!(tabs::named_untitled_path(&state, "/?*.").is_err());
@@ -907,19 +907,19 @@ mod tests {
             "CON drawing.dwg"
         );
         std::fs::write(&path, b"existing drawing").unwrap();
-        let second = tabs::named_untitled_path(&state, "فيلا G+1 plans").unwrap();
-        assert_eq!(second.file_name().unwrap(), "فيلا G+1 plans 2.dwg");
+        let second = tabs::named_untitled_path(&state, "مطار G+4 plans").unwrap();
+        assert_eq!(second.file_name().unwrap(), "مطار G+4 plans 2.dwg");
         std::fs::write(qiyas_core::autosave_path(&second), b"recovery").unwrap();
-        let third = tabs::named_untitled_path(&state, "فيلا G+1 plans").unwrap();
-        assert_eq!(third.file_name().unwrap(), "فيلا G+1 plans 3.dwg");
+        let third = tabs::named_untitled_path(&state, "مطار G+4 plans").unwrap();
+        assert_eq!(third.file_name().unwrap(), "مطار G+4 plans 3.dwg");
         tabs::add(&state, qiyas_core::Session::new_blank(&third, 6)).unwrap();
-        assert_eq!(tabs::snapshot(&state).tabs[0].title, "فيلا G+1 plans 3.dwg");
+        assert_eq!(tabs::snapshot(&state).tabs[0].title, "مطار G+4 plans 3.dwg");
         assert_eq!(
-            tabs::named_untitled_path(&state, "فيلا G+1 plans")
+            tabs::named_untitled_path(&state, "مطار G+4 plans")
                 .unwrap()
                 .file_name()
                 .unwrap(),
-            "فيلا G+1 plans 4.dwg"
+            "مطار G+4 plans 4.dwg"
         );
     }
 
@@ -934,26 +934,26 @@ mod tests {
         let first = qiyas_ai::host::run_host(
             &host,
             "new_drawing",
-            &json!({"name":"Villa G+1 plans","units":"m"}),
+            &json!({"name":"Terminal G+4 plans","units":"m"}),
             None,
         )
         .unwrap();
-        assert_eq!(first["name"], "Villa G+1 plans");
+        assert_eq!(first["name"], "Terminal G+4 plans");
         assert!(first["message"]
             .as_str()
             .unwrap()
-            .contains("Villa G+1 plans"));
+            .contains("Terminal G+4 plans"));
         let second = qiyas_ai::host::run_host(
             &host,
             "new_drawing",
-            &json!({"name":"Villa G+1 plans","units":"m"}),
+            &json!({"name":"Terminal G+4 plans","units":"m"}),
             None,
         )
         .unwrap();
-        assert_eq!(second["name"], "Villa G+1 plans 2");
+        assert_eq!(second["name"], "Terminal G+4 plans 2");
         let tabs = tabs::snapshot(&app.state::<AppState>());
-        assert_eq!(tabs.tabs[0].title, "Villa G+1 plans.dwg");
-        assert_eq!(tabs.tabs[1].title, "Villa G+1 plans 2.dwg");
+        assert_eq!(tabs.tabs[0].title, "Terminal G+4 plans.dwg");
+        assert_eq!(tabs.tabs[1].title, "Terminal G+4 plans 2.dwg");
     }
 
     #[test]
@@ -961,16 +961,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("exports");
         std::fs::create_dir_all(&folder).unwrap();
-        let mut session = qiyas_core::Session::new_blank(&dir.path().join("Villa plans.dwg"), 6);
+        let mut session = qiyas_core::Session::new_blank(&dir.path().join("Terminal plans.dwg"), 6);
         session.set_export_directory(folder.clone());
         for (command, filename) in [
             (
                 json!({"type":"deliverable","kind":"export","report":"register","format":"excel"}),
-                "Villa plans - Register.xlsx",
+                "Terminal plans - Register.xlsx",
             ),
             (
                 json!({"type":"deliverable.export","kind":"register","format":"excel"}),
-                "Villa plans - Register 2.xlsx",
+                "Terminal plans - Register 2.xlsx",
             ),
         ] {
             let output = qiyas_ai::surface::run_session(
@@ -989,13 +989,13 @@ mod tests {
             assert!(path.is_file());
             assert_eq!(&std::fs::read(&path).unwrap()[..2], b"PK");
         }
-        assert!(folder.join("Villa plans - Register.xlsx").is_file());
+        assert!(folder.join("Terminal plans - Register.xlsx").is_file());
     }
 
     #[test]
     fn mizan_edits_report_whole_part_overlaps_and_arrange_clears_them() {
         let dir = tempfile::tempdir().unwrap();
-        let mut session = qiyas_core::Session::new_blank(&dir.path().join("Villa.dwg"), 6);
+        let mut session = qiyas_core::Session::new_blank(&dir.path().join("Terminal.dwg"), 6);
         let run = |s: &mut qiyas_core::Session, command: Value| {
             let result = qiyas_ai::surface::run_session(
                 s,
@@ -1090,7 +1090,7 @@ mod tests {
             assert_eq!(error["code"], "stale_read");
         }
         for (name, args) in [
-            ("new_drawing", json!({"name":"Villa plans","units":"m"})),
+            ("new_drawing", json!({"name":"Terminal plans","units":"m"})),
             ("save_drawing", json!({})),
             ("close_drawing", json!({})),
         ] {
@@ -1105,7 +1105,7 @@ mod tests {
         qiyas_ai::host::run_host(
             &host,
             "new_drawing",
-            &json!({"name":"Villa plans","units":"cm","expected_revision":fresh}),
+            &json!({"name":"Terminal plans","units":"cm","expected_revision":fresh}),
             None,
         )
         .unwrap();

@@ -35,7 +35,7 @@ const newer = (drawing: string, saved_at: number, more: Partial<Recoverable> = {
   ...more,
 });
 
-const items: Recoverable[] = [newer("/jobs/villa.dwg", 1_760_000_000), newer("/jobs/tower.dxf", 1_760_000_100)];
+const items: Recoverable[] = [newer("/jobs/terminal.dwg", 1_760_000_000), newer("/jobs/tower.dxf", 1_760_000_100)];
 
 const noop = async () => {};
 
@@ -63,7 +63,7 @@ test("crashed: Qiyas closed unexpectedly last time, Recover, Discard and Later a
   const onRecover = vi.fn(async () => {});
   const onDiscard = vi.fn(async () => {});
   // The autosave may be older than the drawing after a crash: the row says so.
-  const crashed = newer("/jobs/villa.dwg", 1_760_000_000, { drawing_at: 1_760_000_900, crashed: true });
+  const crashed = newer("/jobs/terminal.dwg", 1_760_000_000, { drawing_at: 1_760_000_900, crashed: true });
   render(
     <LanguageProvider>
       <RecoveryDialog items={[crashed]} onRecover={onRecover} onDiscard={onDiscard} onOpen={noop} onClose={() => {}} />
@@ -78,15 +78,15 @@ test("crashed: Qiyas closed unexpectedly last time, Recover, Discard and Later a
   expect(row).not.toContain(en["recovery.crashedItem"]);
 
   fireEvent.click(screen.getByRole("button", { name: "Recover" }));
-  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/terminal.dwg"));
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
-  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/terminal.dwg"));
   expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
 });
 
 test("crashed and newer together: the crash heads the dialog and marks its own rows", () => {
   show([
-    newer("/jobs/villa.dwg", 1_760_000_000, { crashed: true }),
+    newer("/jobs/terminal.dwg", 1_760_000_000, { crashed: true }),
     newer("/jobs/tower.dxf", 1_760_000_100),
   ]);
   expect(screen.getByRole("heading").textContent).toBe(en["recovery.crashedTitle"]);
@@ -98,7 +98,7 @@ test("crashed and newer together: the crash heads the dialog and marks its own r
 test("open in another Qiyas: a warning with its PID and computer; only Open anyway and Later", async () => {
   const onOpen = vi.fn(async () => {});
   const onDiscard = vi.fn(async () => {});
-  const locked = newer("/jobs/villa.dwg", 1_760_000_000, {
+  const locked = newer("/jobs/terminal.dwg", 1_760_000_000, {
     locked_elsewhere: { pid: 4242, host: "site-office-pc", started_at: 1_759_990_000 },
   });
   render(
@@ -122,13 +122,13 @@ test("open in another Qiyas: a warning with its PID and computer; only Open anyw
   expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
 
   fireEvent.click(within(lockedRow).getByRole("button", { name: "Open anyway" }));
-  await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/jobs/terminal.dwg"));
   expect(onDiscard).not.toHaveBeenCalled();
 });
 
 test("open elsewhere, nothing to recover: the warning, Open anyway and Later, no autosave time", async () => {
   const onOpen = vi.fn(async () => {});
-  const lockOnly = newer("/jobs/villa.dwg", 0, {
+  const lockOnly = newer("/jobs/terminal.dwg", 0, {
     autosave: null,
     saved_at: null,
     drawing_at: 1_760_000_000,
@@ -149,20 +149,20 @@ test("open elsewhere, nothing to recover: the warning, Open anyway and Later, no
   expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual(["Open anyway"]);
   expect(screen.getByRole("button", { name: "Later" })).toBeTruthy();
   fireEvent.click(within(row).getByRole("button", { name: "Open anyway" }));
-  await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/jobs/terminal.dwg"));
 });
 
 test("older copies from a crash are listed under the row, each with its own Recover and Discard", async () => {
   const onRecover = vi.fn(async () => {});
   const onDiscard = vi.fn(async () => {});
   const copies = [
-    { path: "/jobs/villa.dwg.sv$.4242", saved_at: 1_760_170_000, kind: "instance" as const },
-    { path: "/jobs/villa.dwg.sv$.crash-20261010-090000", saved_at: 1_760_080_000, kind: "crash" as const },
+    { path: "/jobs/terminal.dwg.sv$.4242", saved_at: 1_760_170_000, kind: "instance" as const },
+    { path: "/jobs/terminal.dwg.sv$.crash-20261010-090000", saved_at: 1_760_080_000, kind: "crash" as const },
   ];
   render(
     <LanguageProvider>
       <RecoveryDialog
-        items={[newer("/jobs/villa.dwg", 0, { autosave: null, saved_at: null, older_copies: copies })]}
+        items={[newer("/jobs/terminal.dwg", 0, { autosave: null, saved_at: null, older_copies: copies })]}
         onRecover={onRecover}
         onDiscard={onDiscard}
         onOpen={noop}
@@ -182,9 +182,9 @@ test("older copies from a crash are listed under the row, each with its own Reco
   expect([...drawingRow.querySelectorAll(":scope > .actions button")]).toHaveLength(0);
 
   fireEvent.click(within(rows[1]).getByRole("button", { name: "Recover" }));
-  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/villa.dwg", copies[1].path));
+  await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/terminal.dwg", copies[1].path));
   fireEvent.click(within(rows[0]).getByRole("button", { name: "Discard" }));
-  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/villa.dwg", copies[0].path));
+  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/terminal.dwg", copies[0].path));
 });
 
 test("Later waits while Recover or Discard is working (a click or Escape)", async () => {
@@ -223,7 +223,7 @@ test("in Arabic the times, the PID and the computer are isolated, so they read i
         </button>
         <RecoveryDialog
           items={[
-            newer("/jobs/villa.dwg", 1_760_000_000, {
+            newer("/jobs/terminal.dwg", 1_760_000_000, {
               drawing_at: null,
               crashed: true,
               locked_elsewhere: { pid: 77, host: "qs-laptop", started_at: 1 },
@@ -264,13 +264,13 @@ test("each autosave newer than its drawing is offered: recover or discard it", a
   expect(screen.getByRole("heading").textContent).toBe("A newer autosave exists");
   const rows = screen.getAllByRole("listitem");
   expect(rows).toHaveLength(2);
-  expect(rows[0].textContent).toContain("villa.dwg");
+  expect(rows[0].textContent).toContain("terminal.dwg");
   expect(rows[0].textContent).toContain("/jobs");
 
   fireEvent.click(screen.getAllByRole("button", { name: "Recover" })[1]);
   await waitFor(() => expect(onRecover).toHaveBeenCalledWith("/jobs/tower.dxf"));
   fireEvent.click(screen.getAllByRole("button", { name: "Discard" })[0]);
-  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/villa.dwg"));
+  await waitFor(() => expect(onDiscard).toHaveBeenCalledWith("/jobs/terminal.dwg"));
   expect(onClose).not.toHaveBeenCalled();
 });
 
@@ -299,7 +299,7 @@ test("a refused Discard (the drawing was opened elsewhere meanwhile) says why an
         items={items.slice(0, 1)}
         onRecover={noop}
         onDiscard={async () => {
-          throw "/jobs/villa.dwg is open in another Qiyas (process 4242 on site-office-pc): its autosave stays";
+          throw "/jobs/terminal.dwg is open in another Qiyas (process 4242 on site-office-pc): its autosave stays";
         }}
         onOpen={noop}
         onClose={() => {}}

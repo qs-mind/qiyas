@@ -11,11 +11,11 @@ fn a_sheet_set_keeps_relative_paths_and_reads_back() {
     std::fs::create_dir(&plans).unwrap();
     let a = write_sample(&plans, "dwg");
     let b = write_sample(dir.path(), "dxf");
-    let qss = dir.path().join("Villa.qss");
+    let qss = dir.path().join("Terminal.qss");
 
     let set = SheetSet {
         project: None,
-        name: "Villa".into(),
+        name: "Terminal".into(),
         drawings: vec![
             sheet_set_entry(&qss, &a, vec!["Layout1".into()]).unwrap(),
             sheet_set_entry(&qss, &b, Vec::new()).unwrap(),

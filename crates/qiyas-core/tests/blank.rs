@@ -102,9 +102,9 @@ fn an_untitled_drawings_take_off_is_written_beside_its_first_save_and_comes_back
     .unwrap();
     assert_eq!(s.takeoff.items.len(), 1);
 
-    let target = dir.path().join("Cairo villa.dwg");
+    let target = dir.path().join("Cairo terminal.dwg");
     s.save_as(&target).unwrap();
-    let sidecar = dir.path().join("Cairo villa.qiyas");
+    let sidecar = dir.path().join("Cairo terminal.qiyas");
     assert!(sidecar.exists(), "the project file sits beside the drawing");
     assert!(
         !placeholder.with_extension("qiyas").exists(),

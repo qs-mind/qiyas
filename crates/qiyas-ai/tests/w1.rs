@@ -207,7 +207,7 @@ async fn several_questions_go_out_in_one_event_with_options_and_end_the_turn() {
     ]);
     let (provider, requests) = Queue::new(vec![Reply::Calls("", vec![ask(questions)])]);
     let mut agent = agent(provider, session);
-    let events = turn(&mut agent, "Design a villa package").await;
+    let events = turn(&mut agent, "Design a terminal package").await;
 
     let asked: Vec<_> = events
         .iter()
@@ -261,7 +261,7 @@ async fn the_answer_to_a_question_continues_the_same_conversation() {
         Reply::Text("Egypt, understood. I will use Egyptian practice."),
     ]);
     let mut agent = agent(provider, session);
-    turn(&mut agent, "Draw a villa").await;
+    turn(&mut agent, "Draw a terminal").await;
     let events = turn(&mut agent, "Egypt").await;
     assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
     let requests = requests.lock().unwrap();
@@ -544,7 +544,7 @@ async fn an_answer_in_the_other_language_is_not_rewritten() {
 async fn names_and_files_in_the_other_language_do_not_trigger_the_language_retry() {
     let (_dir, session) = sample();
     let (provider, requests) = Queue::new(vec![Reply::Text(
-        "The files are Cairo_Villa_Plans.pdf and Villa_Quantities.xlsx; rooms named مجلس and صالة are labelled.",
+        "The files are Cairo_Terminal_Plans.pdf and Terminal_Quantities.xlsx; rooms named مجلس and صالة are labelled.",
     )]);
     let mut a = agent(provider, session);
     turn(&mut a, "List the files").await;
@@ -692,7 +692,11 @@ fn quantities_with_outstanding_checks_are_named_draft_by_qiyas() {
     let ok = export(&mut session, "export_takeoff", json!({"path":"fine.xlsx"})).unwrap();
     assert!(ok.get("draft").is_none(), "{ok}");
     failing_check(&mut session);
-    for name in ["villa.xlsx", "villa_DRAFT.xlsx", "DRAFT villa.xlsx"] {
+    for name in [
+        "terminal.xlsx",
+        "terminal_DRAFT.xlsx",
+        "DRAFT terminal.xlsx",
+    ] {
         let draft = export(&mut session, "export_takeoff", json!({"path":name})).unwrap();
         assert_eq!(draft["draft"], true);
         assert!(!draft["outstanding_checks"].as_array().unwrap().is_empty());
@@ -704,7 +708,7 @@ fn quantities_with_outstanding_checks_are_named_draft_by_qiyas() {
             .starts_with("DRAFT "));
         assert!(path.exists());
     }
-    assert!(!dir.path().join("villa.xlsx").exists());
+    assert!(!dir.path().join("terminal.xlsx").exists());
     let command = |file: &str| json!({"command":{"type":"deliverable","kind":"export","report":"boq","format":"excel","path":file}});
     let draft = export(&mut session, "run", command("boq.xlsx")).unwrap();
     assert_eq!(draft["draft"], true);

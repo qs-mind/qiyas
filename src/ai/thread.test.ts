@@ -15,7 +15,7 @@ test("questions are open until the user writes after them", () => {
 
 test("the conversation speaks the user's latest language, else the window's", () => {
   expect(chatLanguage([], "en")).toBe("en");
-  expect(chatLanguage([{ kind: "user", text: "ارسم فيلا" }], "en")).toBe("ar");
-  expect(chatLanguage([{ kind: "user", text: "ارسم فيلا" }, { kind: "user", text: "draw a villa" }], "ar")).toBe("en");
+  expect(chatLanguage([{ kind: "user", text: "ارسم مطار" }], "en")).toBe("ar");
+  expect(chatLanguage([{ kind: "user", text: "ارسم مطار" }, { kind: "user", text: "draw a terminal" }], "ar")).toBe("en");
   expect(chatLanguage([{ kind: "assistant", text: "مرحبا", finished: true }], "en")).toBe("en");
 });

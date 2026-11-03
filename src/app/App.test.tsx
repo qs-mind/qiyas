@@ -1517,7 +1517,7 @@ const press = (code: string, more: Partial<KeyboardEventInit> = {}) =>
 test("Ctrl+S on an untitled drawing says it will ask, offers a real name and folder, then says Saved (notes 67, 68)", async () => {
   core.untitled = true;
   core.opened = true;
-  core.nameRows = [["A-ANNO-TTLB", "Ground floor plan", 290], ["A-ANNO-TTLB", "Cairo Villa", 282], ["A-ANNO-TTLB", "A-101", 274]];
+  core.nameRows = [["A-ANNO-TTLB", "Ground floor plan", 290], ["A-ANNO-TTLB", "Cairo Terminal", 282], ["A-ANNO-TTLB", "A-101", 274]];
   await mount();
   await emit("drawing:shown", null);
   await until(() => expect(core.calls).toContain("render_batch {\"workspace\":1}"));
@@ -1529,10 +1529,10 @@ test("Ctrl+S on an untitled drawing says it will ask, offers a real name and fol
   await expectToasts([en["save.choose"]]);
   await until(() => expect(vi.mocked(saveDialog)).toHaveBeenCalled());
   const offered = vi.mocked(saveDialog).mock.calls.at(-1)![0] as { defaultPath: string };
-  expect(offered.defaultPath).toBe("/home/u/Documents/Cairo Villa.dwg");
+  expect(offered.defaultPath).toBe("/home/u/Documents/Cairo Terminal.dwg");
   expect(offered.defaultPath).not.toMatch(/untitled/i);
-  await act(async () => choose("/home/u/Documents/Cairo Villa.dwg"));
-  await expectToasts(["Saved Cairo Villa.dwg"]);
+  await act(async () => choose("/home/u/Documents/Cairo Terminal.dwg"));
+  await expectToasts(["Saved Cairo Terminal.dwg"]);
   expect(core.calls.some((c) => c.startsWith("save_drawing_as"))).toBe(true);
 });
 
