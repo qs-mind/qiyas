@@ -13,6 +13,7 @@ use tauri::State;
 pub enum FileViewKind {
     Pdf,
     Workbook,
+    Drawing,
     Image,
     Text,
 }
@@ -31,15 +32,16 @@ fn output_kind(path: &Path) -> Result<FileViewKind, String> {
     let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
     match extension.to_ascii_lowercase().as_str() {
         "pdf" => Ok(FileViewKind::Pdf),
-        "xlsx" | "xlsm" | "xls" => Ok(FileViewKind::Workbook),
-        "png" | "jpg" | "jpeg" | "webp" | "gif" => Ok(FileViewKind::Image),
+        "xlsx" => Ok(FileViewKind::Workbook),
+        "dwg" | "dxf" => Ok(FileViewKind::Drawing),
+        "svg" | "png" | "jpg" | "jpeg" | "webp" | "gif" => Ok(FileViewKind::Image),
         "csv" | "txt" | "md" | "json" => Ok(FileViewKind::Text),
         _ => Err("This file type cannot be viewed. لا يمكن عرض هذا النوع من الملفات.".into()),
     }
 }
 
 fn output_path(path: &str, roots: &[PathBuf]) -> Result<PathBuf, String> {
-    crate::paths::output(Path::new(path), roots, false)
+    crate::paths::output(Path::new(path), roots)
 }
 
 async fn blocking<T: Send + 'static>(
@@ -59,8 +61,9 @@ pub async fn file_view_info(
     state: State<'_, AppState>,
 ) -> Result<FileViewInfo, String> {
     let roots = crate::paths::output_roots(&state)?;
+    let written = written_files(&state);
     blocking(move || {
-        let path = output_path(&path, &roots)?;
+        let path = confirmed_output(&path, &roots, &written)?;
         let kind = output_kind(&path)?;
         let size_bytes = path
             .metadata()
@@ -101,8 +104,9 @@ pub async fn file_view_pdf_page(
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
     let roots = crate::paths::output_roots(&state)?;
+    let written = written_files(&state);
     blocking(move || {
-        let path = output_path(&path, &roots)?;
+        let path = confirmed_output(&path, &roots, &written)?;
         if output_kind(&path)? != FileViewKind::Pdf {
             return Err("Choose a PDF file. اختر ملف PDF.".into());
         }
@@ -131,8 +135,9 @@ pub async fn file_view_workbook(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let roots = crate::paths::output_roots(&state)?;
+    let written = written_files(&state);
     blocking(move || {
-        let path = output_path(&path, &roots)?;
+        let path = confirmed_output(&path, &roots, &written)?;
         if output_kind(&path)? != FileViewKind::Workbook {
             return Err("Choose an Excel workbook. اختر مصنف Excel.".into());
         }
@@ -175,8 +180,9 @@ fn read_view_bytes(path: &Path) -> Result<Vec<u8>, String> {
 #[tauri::command]
 pub async fn file_view_bytes(path: String, state: State<'_, AppState>) -> Result<Response, String> {
     let roots = crate::paths::output_roots(&state)?;
+    let written = written_files(&state);
     blocking(move || {
-        let path = output_path(&path, &roots)?;
+        let path = confirmed_output(&path, &roots, &written)?;
         read_view_bytes(&path).map(Response::new)
     })
     .await
@@ -216,9 +222,33 @@ fn viewer(path: &Path, reveal: bool) -> Command {
     }
 }
 
-async fn show(path: String, reveal: bool, roots: Vec<PathBuf>) -> Result<(), String> {
+fn confirmed_output(path: &str, roots: &[PathBuf], written: &[PathBuf]) -> Result<PathBuf, String> {
+    let path = output_path(path, roots)?;
+    if !written.contains(&path) {
+        return Err(
+            "Qiyas has no record of writing this file. لا يوجد سجل لكتابة هذا الملف في قياس.".into(),
+        );
+    }
+    Ok(path)
+}
+
+fn written_files(state: &AppState) -> Vec<PathBuf> {
+    state
+        .conversations()
+        .iter()
+        .filter(|workspace| !workspace.closed.load(std::sync::atomic::Ordering::Acquire))
+        .flat_map(|workspace| crate::state::lock(&workspace.ai).written_files())
+        .collect()
+}
+
+async fn show(
+    path: String,
+    reveal: bool,
+    roots: Vec<PathBuf>,
+    written: Vec<PathBuf>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let path = crate::paths::output(Path::new(&path), &roots, !reveal)?;
+        let path = confirmed_output(&path, &roots, &written)?;
         let status = viewer(&path, reveal)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -237,12 +267,24 @@ async fn show(path: String, reveal: bool, roots: Vec<PathBuf>) -> Result<(), Str
 
 #[tauri::command]
 pub async fn open_output_file(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    show(path, false, crate::paths::output_roots(&state)?).await
+    show(
+        path,
+        false,
+        crate::paths::output_roots(&state)?,
+        written_files(&state),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn reveal_output_file(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    show(path, true, crate::paths::output_roots(&state)?).await
+    show(
+        path,
+        true,
+        crate::paths::output_roots(&state)?,
+        written_files(&state),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -256,8 +298,9 @@ mod tests {
         for (extension, kind) in [
             ("pdf", FileViewKind::Pdf),
             ("xlsx", FileViewKind::Workbook),
-            ("xlsm", FileViewKind::Workbook),
-            ("xls", FileViewKind::Workbook),
+            ("dwg", FileViewKind::Drawing),
+            ("dxf", FileViewKind::Drawing),
+            ("svg", FileViewKind::Image),
             ("csv", FileViewKind::Text),
             ("txt", FileViewKind::Text),
             ("md", FileViewKind::Text),
@@ -328,6 +371,7 @@ mod tests {
         let file = dir.path().join("الكمية.CSV");
         let content = "البند,الكمية\nجدار,2".as_bytes();
         std::fs::write(&file, content).unwrap();
+        crate::paths::tests::confirm_output(&app, &file);
         let path = file.to_str().unwrap().to_string();
         let info =
             tauri::async_runtime::block_on(file_view_info(path.clone(), app.state())).unwrap();
@@ -362,6 +406,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = crate::paths::tests::tower_app(dir.path());
         let path = qiyas_pdf::fixtures::write_wall(dir.path());
+        crate::paths::tests::confirm_output(&app, &path);
         let path = path.to_str().unwrap().to_string();
         let info =
             tauri::async_runtime::block_on(file_view_info(path.clone(), app.state())).unwrap();
@@ -427,6 +472,83 @@ mod tests {
         assert!(output_path("https://example.test/plan.pdf", &[dir.path().to_path_buf()]).is_err());
     }
 
+    #[test]
+    fn only_confirmed_writes_can_be_opened_or_revealed() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+        for extension in crate::paths::OUTPUTS {
+            let path = dir.path().join(format!("tower-output.{extension}"));
+            std::fs::write(&path, b"output").unwrap();
+            let canonical = path.canonicalize().unwrap();
+            assert!(confirmed_output(path.to_str().unwrap(), &roots, &[]).is_err());
+            assert_eq!(
+                confirmed_output(
+                    path.to_str().unwrap(),
+                    &roots,
+                    std::slice::from_ref(&canonical)
+                )
+                .unwrap(),
+                canonical
+            );
+        }
+        let app = crate::paths::tests::tower_app(dir.path());
+        let path = dir
+            .path()
+            .join("tower-output.txt")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            tauri::async_runtime::block_on(open_output_file(path.clone(), app.state()))
+                .unwrap_err()
+                .contains("no record")
+        );
+        assert!(
+            tauri::async_runtime::block_on(reveal_output_file(path, app.state()))
+                .unwrap_err()
+                .contains("no record")
+        );
+    }
+
+    #[test]
+    fn unsafe_file_types_are_refused_even_when_confirmed_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+        for extension in [
+            "xlsm", "xlsb", "xls", "xlam", "docm", "doc", "pptm", "exe", "bat", "cmd", "sh", "js",
+            "mjs", "ps1", "vbs", "com", "scr", "lnk", "url", "desktop", "html",
+        ] {
+            for extension in [extension.to_string(), extension.to_ascii_uppercase()] {
+                let path = dir.path().join(format!("output.{extension}"));
+                std::fs::write(&path, b"test").unwrap();
+                assert!(confirmed_output(
+                    path.to_str().unwrap(),
+                    &roots,
+                    &[path.canonicalize().unwrap()]
+                )
+                .is_err());
+                assert!(output_kind(&path).is_err());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confirmation_binds_to_the_canonical_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+        let output = dir.path().join("tower.txt");
+        let unrelated = dir.path().join("unrelated.txt");
+        std::fs::write(&output, b"output").unwrap();
+        std::fs::write(&unrelated, b"unrelated").unwrap();
+        let written = vec![output.canonicalize().unwrap()];
+        let link = dir.path().join("alias.txt");
+        std::os::unix::fs::symlink(&output, &link).unwrap();
+        assert!(confirmed_output(link.to_str().unwrap(), &roots, &written).is_ok());
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&unrelated, &link).unwrap();
+        assert!(confirmed_output(link.to_str().unwrap(), &roots, &written).is_err());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn viewer_treats_paths_as_one_argument_and_reveals_the_parent() {
@@ -467,6 +589,7 @@ mod trace_tests {
         }))
         .unwrap();
         qiyas_plot::report::write(&path, &report).unwrap();
+        crate::paths::tests::confirm_output(&app, &path);
         let info = tauri::async_runtime::block_on(file_view_info(
             path.to_string_lossy().into_owned(),
             app.state(),

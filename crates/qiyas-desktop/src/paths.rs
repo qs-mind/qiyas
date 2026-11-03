@@ -7,7 +7,8 @@ pub(crate) const DRAWINGS: &[&str] = &["dwg", "dxf"];
 pub(crate) const WORKBOOKS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb", "ods"];
 pub(crate) const IMAGES: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp", "gif"];
 pub(crate) const OUTPUTS: &[&str] = &[
-    "pdf", "xlsx", "xlsm", "xls", "png", "jpg", "jpeg", "webp", "gif", "csv", "txt", "md", "json",
+    "pdf", "xlsx", "dwg", "dxf", "svg", "png", "jpg", "jpeg", "webp", "gif", "csv", "txt", "md",
+    "json",
 ];
 
 fn refused(path: &Path, why: impl std::fmt::Display) -> String {
@@ -244,7 +245,7 @@ pub(crate) fn output_roots(state: &AppState) -> Result<Vec<PathBuf>, String> {
     Ok(roots)
 }
 
-pub(crate) fn output(path: &Path, roots: &[PathBuf], open: bool) -> Result<PathBuf, String> {
+pub(crate) fn output(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(refused(path, "use an absolute file path"));
     }
@@ -257,16 +258,6 @@ pub(crate) fn output(path: &Path, roots: &[PathBuf], open: bool) -> Result<PathB
         return Err(refused(
             path,
             "the file is outside the open drawings, open project and Qiyas data folders",
-        ));
-    }
-    if open
-        && resolved
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("xlsm") || e.eq_ignore_ascii_case("xls"))
-    {
-        return Err(refused(
-            path,
-            "workbooks that can contain macros can only be previewed in Qiyas",
         ));
     }
     Ok(resolved)
@@ -472,6 +463,17 @@ pub(crate) mod tests {
             .unwrap()
     }
 
+    pub(crate) fn confirm_output(app: &tauri::App<MockRuntime>, path: &Path) {
+        let state = app.state::<AppState>().scoped(None).unwrap();
+        let provider = || Box::new(qiyas_ai::anthropic::Anthropic::new(String::new()));
+        let mut saved =
+            qiyas_ai::Agent::new(provider(), state.session.clone(), Default::default()).snapshot();
+        saved.written_files.insert(path.canonicalize().unwrap());
+        let agent =
+            qiyas_ai::Agent::resume(saved, provider(), state.session.clone(), Default::default());
+        lock(&state.ai).resume(agent);
+    }
+
     #[test]
     fn export_table_refuses_dotfiles_and_writes_a_tower_workbook() {
         let dir = tempfile::tempdir().unwrap();
@@ -509,6 +511,8 @@ pub(crate) mod tests {
             ))
         };
         assert!(read(&outside).is_err());
+        assert!(read(&inside).is_err());
+        confirm_output(&app, &inside);
         assert!(read(&inside).is_ok());
         assert!(read(&tower.join("../elsewhere/auth.json")).is_err());
         #[cfg(unix)]
@@ -520,19 +524,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn macro_workbooks_can_be_previewed_but_never_opened_in_the_os() {
+    fn macro_workbooks_are_not_outputs() {
         let dir = tempfile::tempdir().unwrap();
         let app = tower_app(dir.path());
-        for extension in ["xlsm", "xls", "XLSM"] {
+        for extension in ["xlsm", "xls", "xlsb", "XLSM"] {
             let file = dir.path().join(format!("tower-boq.{extension}"));
             std::fs::write(&file, b"workbook").unwrap();
             let path = file.to_string_lossy().into_owned();
-            tauri::async_runtime::block_on(output_files::file_view_info(path.clone(), app.state()))
-                .unwrap();
-            let error =
-                tauri::async_runtime::block_on(output_files::open_output_file(path, app.state()))
-                    .unwrap_err();
-            assert!(error.contains("macros"), "{error}");
+            assert!(tauri::async_runtime::block_on(output_files::file_view_info(
+                path.clone(),
+                app.state()
+            ))
+            .is_err());
+            assert!(
+                tauri::async_runtime::block_on(output_files::open_output_file(
+                    path.clone(),
+                    app.state()
+                ))
+                .is_err()
+            );
+            assert!(
+                tauri::async_runtime::block_on(output_files::reveal_output_file(path, app.state()))
+                    .is_err()
+            );
         }
     }
 
@@ -630,7 +644,7 @@ pub(crate) mod tests {
         for folder in [&tower, &podium, &exports] {
             let path = folder.join("quantities.json");
             std::fs::write(&path, b"{}").unwrap();
-            assert!(output(&path, &output_roots(&state).unwrap(), false).is_ok());
+            assert!(output(&path, &output_roots(&state).unwrap()).is_ok());
         }
     }
 
@@ -659,7 +673,7 @@ pub(crate) mod tests {
         let _busy = bound.session.lock().unwrap();
         let path = dir.path().join("podium.json");
         std::fs::write(&path, b"{}").unwrap();
-        assert!(output(&path, &output_roots(&state).unwrap(), false).is_ok());
+        assert!(output(&path, &output_roots(&state).unwrap()).is_ok());
     }
 
     #[test]
@@ -746,6 +760,6 @@ pub(crate) mod tests {
         lock(&app.state::<AppState>().projects).active = Some(project.clone());
         let roots = output_roots(&app.state::<AppState>()).unwrap();
         std::fs::remove_file(&project).unwrap();
-        assert!(output(&auth, &roots, false).is_err());
+        assert!(output(&auth, &roots).is_err());
     }
 }

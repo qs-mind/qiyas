@@ -22,6 +22,7 @@ export function FileViewer({ path }: { path: string }) {
 }
 
 function FileContent({ path }: { path: string }) {
+  const t = useT();
   const { lang } = useLanguage();
   const [info, setInfo] = useState<FileViewInfo | null>(null);
   const [book, setBook] = useState<FileViewWorkbook | null>(null);
@@ -37,7 +38,7 @@ function FileContent({ path }: { path: string }) {
         if (next.kind === "workbook") {
           const value = await fileViewWorkbook(path);
           if (!cancelled) setBook(value);
-        } else if (next.kind !== "pdf") {
+        } else if (next.kind !== "pdf" && next.kind !== "drawing") {
           const value = await fileViewBytes(path);
           if (!cancelled) setBytes(value);
         }
@@ -48,6 +49,7 @@ function FileContent({ path }: { path: string }) {
   }, [path, lang]);
   return <div className="file-viewer">
     {error ? <p className="file-status" role="alert">{error}</p>
+      : info?.kind === "drawing" ? <p className="file-status">{t("fileView.externalOnly")}</p>
       : info?.kind === "pdf" ? <PdfViewer path={path} pages={info.pages ?? 0} map={info.trace} />
       : book ? <WorkbookViewer book={book} />
       : bytes && info ? info.kind === "image" ? <ImageViewer bytes={bytes} name={info.name} />
@@ -228,7 +230,7 @@ function ImageViewer({ bytes, name }: { bytes: ArrayBuffer; name: string }) {
   const [actual, setActual] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => {
-    const types: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+    const types: Record<string, string> = { svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
     const objectUrl = URL.createObjectURL(new Blob([bytes], { type: types[name.split(".").pop()!.toLowerCase()] ?? "application/octet-stream" }));
     setUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);

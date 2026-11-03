@@ -9,10 +9,10 @@ const card = (result: unknown, more: Partial<ToolCardItem> = {}): ToolCardItem =
   handles: [], ui: null, mutating: false, undone: false, stale: false, ...more,
 });
 
-test("collects PDFs and workbooks from written results, including batches, once per full path", () => {
+test("collects PDFs and workbooks from written results, including flat lists, once per full path", () => {
   const transcript: Transcript = { items: [
     card({ written: file("plan.pdf") }),
-    card({ outcome: { steps: [{ written: file("bill.xlsx") }, { written: [file("evidence.pdf"), file("plan.pdf")] }] } }),
+    card({ written: [file("bill.xlsx"), file("evidence.pdf"), file("plan.pdf")] }),
     card({ written: file("revision/plan.pdf") }, { restored: true }),
   ] };
   expect(transcriptFiles(transcript)).toEqual([
@@ -42,9 +42,31 @@ test("a new conversation has no files from the previous conversation", () => {
 });
 
 test("collects all supported written output extensions and still requires an absolute path", () => {
-  const extensions = ["xlsm", "xls", "csv", "txt", "md", "json", "png", "jpg", "jpeg", "webp", "gif"];
+  const extensions = ["pdf", "xlsx", "dwg", "dxf", "svg", "csv", "txt", "md", "json", "png", "jpg", "jpeg", "webp", "gif"];
   const paths = extensions.map(ext => file(`output.${ext.toUpperCase()}`));
   expect(transcriptFiles({ items: [card({ written: paths })] }).map(value => value.path)).toEqual(paths);
   expect(transcriptFiles({ items: [card({ written: extensions.flatMap(ext => [`relative.${ext}`, `https://host/file.${ext}`, `/bad\nname.${ext}`]) })] })).toEqual([]);
-  expect(transcriptFiles({ items: [card({ written: ["C:\\files\\bill.xls", "\\\\server\\share\\photo.jpg"] })] }).map(value => value.name)).toEqual(["bill.xls", "photo.jpg"]);
+  expect(transcriptFiles({ items: [card({ written: ["C:\\files\\bill.xlsx", "\\\\server\\share\\photo.jpg"] })] }).map(value => value.name)).toEqual(["bill.xlsx", "photo.jpg"]);
+});
+
+
+test("ignores nested written data and results from read tools", () => {
+  const nested = { written: file("unrelated.pdf") };
+  expect(transcriptFiles({ items: [
+    card({ outcome: { steps: [nested] } }),
+    card({ data: nested }),
+    card({ records: [nested] }),
+    card([nested]),
+    card({ written: [[file("nested.pdf")], nested] }),
+    card(nested, { name: "qiyas_read" }),
+    card(nested, { name: "qiyas_capture" }),
+  ] })).toEqual([]);
+  expect(transcriptFiles({ items: [card({ written: file("real.pdf"), data: nested })] }))
+    .toEqual([{ path: file("real.pdf"), name: "real.pdf" }]);
+});
+
+test("rejects macro, executable and unlisted extensions even in successful writes", () => {
+  const extensions = ["xlsm", "xlsb", "xls", "xlam", "docm", "doc", "pptm", "exe", "bat", "cmd", "sh", "js", "mjs", "ps1", "vbs", "com", "scr", "lnk", "url", "desktop", "html"];
+  const paths = extensions.flatMap(ext => [file(`output.${ext}`), file(`output.${ext.toUpperCase()}`)]);
+  expect(transcriptFiles({ items: [card({ written: paths })] })).toEqual([]);
 });

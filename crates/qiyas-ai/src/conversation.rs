@@ -26,6 +26,9 @@ pub struct Conversation {
     pub image_bytes: usize,
     pub provider_state: Value,
     pub transcript: Vec<TranscriptEntry>,
+    /// Canonical paths confirmed by successful execute results, independent of history trimming.
+    #[serde(default)]
+    pub written_files: std::collections::BTreeSet<PathBuf>,
     /// Error attribution must survive an interruption in the middle of a phase too.
     #[serde(default)]
     pub phase_state: PhaseState,

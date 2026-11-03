@@ -19,7 +19,7 @@ export type FileViewPdfTracePage = {
 export type FileViewPdfTrace = { drawing: string | null; pages: FileViewPdfTracePage[] };
 
 export type FileViewInfo = {
-  kind: "pdf" | "workbook" | "image" | "text";
+  kind: "pdf" | "workbook" | "drawing" | "image" | "text";
   name: string;
   size_bytes: number;
   pages: number | null;
@@ -1388,6 +1388,7 @@ export type AiUi = {
   id?: string;
 };
 
+/** Legacy saved plans retain this payload; the window does not display it. */
 export type ExpertFrame = {
   expert_checks: string;
   raw_data: string;

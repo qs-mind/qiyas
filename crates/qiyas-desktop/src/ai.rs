@@ -144,6 +144,15 @@ impl AiRun {
             .clone()
     }
 
+    pub fn written_files(&self) -> Vec<PathBuf> {
+        self.checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|conversation| conversation.written_files.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub fn busy(&self) -> bool {
         self.busy
     }

@@ -273,6 +273,7 @@ pub struct Agent {
     title: String,
     created: u64,
     transcript: Mutex<Vec<TranscriptEntry>>,
+    written_files: Mutex<BTreeSet<PathBuf>>,
     checkpoint: Option<Arc<Mutex<Option<Conversation>>>>,
     resumed: bool,
     plan: Option<surface::Plan>,
@@ -364,6 +365,7 @@ impl Agent {
             title: String::new(),
             created: 0,
             transcript: Mutex::new(Vec::new()),
+            written_files: Mutex::default(),
             checkpoint: None,
             resumed: false,
             plan: None,
@@ -440,6 +442,11 @@ impl Agent {
             provider_state: self.provider.save_state(),
             transcript: self
                 .transcript
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+            written_files: self
+                .written_files
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone(),
@@ -588,6 +595,7 @@ impl Agent {
         // Epochs are process-local, so a resumed phase is matched by path once.
         agent.brief_watch =
             crate::brief_check::Watch::restore(conv.phase_state.brief_check.clone());
+        agent.written_files = Mutex::new(conv.written_files);
         agent.phase_state = conv.phase_state;
         agent.phase_state.drawing = conv.drawing;
         agent
@@ -650,6 +658,28 @@ impl Agent {
             }
             _ => {}
         }
+        let written = crate::output_files::completed(
+            &self
+                .transcript
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            &event,
+        );
+        if !written.is_empty() {
+            let paths = tokio::task::spawn_blocking(move || {
+                written
+                    .into_iter()
+                    .filter_map(|path| path.canonicalize().ok())
+                    .filter(|path| path.is_file())
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            self.written_files
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(paths);
+        }
         conversation::append(
             &mut self
                 .transcript
@@ -700,6 +730,10 @@ impl Agent {
     pub fn clear(&mut self) {
         self.provider.restore_state(Value::Null);
         self.history.clear();
+        self.written_files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         self.job = Job::Drawing;
         self.system = None;
         self.image_bytes = 0;
@@ -3336,12 +3370,45 @@ mod tests {
                 serde_json::json!({"type":"redacted_thinking","data":"unchanged+/="}),
             ),
         ]);
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("tower-output.txt");
+        std::fs::write(&output, "quantities").unwrap();
+        let (events, _receiver) = mpsc::channel(2);
+        agent
+            .emit(
+                &events,
+                AgentEvent::ToolCall {
+                    id: "write-output".into(),
+                    name: surface::EXECUTE.into(),
+                    input: serde_json::json!({}),
+                    label: None,
+                    activity: None,
+                    mutating: true,
+                },
+            )
+            .await;
+        agent
+            .emit(
+                &events,
+                json_result("write-output", &serde_json::json!({"written": output})).1,
+            )
+            .await;
         let saved = agent.snapshot();
+        assert_eq!(
+            saved.written_files,
+            BTreeSet::from([output.canonicalize().unwrap()])
+        );
         assert_eq!(saved.title, "First message");
         assert!(uuid::Uuid::parse_str(&saved.id).is_ok());
         assert!(
             matches!(&saved.transcript[1], TranscriptEntry::Event { event: AgentEvent::Text { text } } if text == "An answer")
         );
+        let mut legacy = serde_json::to_value(&saved).unwrap();
+        legacy.as_object_mut().unwrap().remove("written_files");
+        assert!(serde_json::from_value::<Conversation>(legacy)
+            .unwrap()
+            .written_files
+            .is_empty());
         let bytes = serde_json::to_vec(&saved).unwrap();
         let saved: Conversation = serde_json::from_slice(&bytes).unwrap();
         record_turn(&mut agent, "Continue").await;
@@ -3354,6 +3421,10 @@ mod tests {
             }),
             session,
             AgentSettings::default(),
+        );
+        assert_eq!(
+            resumed.snapshot().written_files,
+            BTreeSet::from([output.canonicalize().unwrap()])
         );
         assert_eq!(*restored_state.lock().unwrap(), *state.lock().unwrap());
         record_turn(&mut resumed, "Continue").await;

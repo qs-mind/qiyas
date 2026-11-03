@@ -7,6 +7,17 @@ section below, so add the section before pushing the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- Mizan draws detailed components as reusable blocks in the drawing. Common commands, including
+  computed geometry with `generate`, are supplied by the drawing kit.
+- Design checks use measured facts and cited job limits. Shipped design datasets, the interiors
+  pack and the `symbol` and `drafting_knowledge` commands were removed. Legacy plan frames remain
+  readable but are no longer requested or displayed.
+- The ribbon uses one handler table; dialogs share typed state through `useDialogs`.
+- Output cards accept only top-level write results and safe file types. Native preview, open and
+  reveal actions require a confirmed write recorded by Qiyas.
+
 ## [0.0.2] - 2026-10-27
 
 ### Added

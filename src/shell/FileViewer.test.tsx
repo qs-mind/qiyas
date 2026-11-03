@@ -23,7 +23,7 @@ beforeEach(() => {
   } as unknown as CanvasRenderingContext2D);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-const info = (kind: "pdf" | "workbook" | "text" | "image", name: string, pages: number | null = null) => ({ kind, name, pages, size_bytes: 128 });
+const info = (kind: "pdf" | "workbook" | "text" | "image" | "drawing", name: string, pages: number | null = null) => ({ kind, name, pages, size_bytes: 128 });
 const bytes = (text: string) => new TextEncoder().encode(text).buffer;
 
 test("three PDF pages have labels and zoom controls; only nearby pages render at capped device resolution", async () => {
@@ -77,10 +77,10 @@ test("workbook hides record sheets, gives Arabic cells their own direction, and 
 
 test("large workbook sheets mount a limited number of rows", async () => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.tagName === "TR" ? 36 : 600; });
-  vi.mocked(fileViewInfo).mockResolvedValue(info("workbook", "large.xlsm"));
+  vi.mocked(fileViewInfo).mockResolvedValue(info("workbook", "large.xlsx"));
   vi.mocked(fileViewWorkbook).mockResolvedValue({ sheets: [{ name: "Many", hidden: false, truncated: false,
     rows_total: 1001, cols_total: 1, rows: [["Name"], ...Array.from({ length: 1000 }, (_, i) => [`Row ${i}`])] }] });
-  render(<FileViewer path="/large.xlsm" />);
+  render(<FileViewer path="/large.xlsx" />);
   expect(await screen.findByRole("table")).toBeTruthy();
   expect(await screen.findByRole("cell", { name: "Row 0" })).toBeTruthy();
   expect(screen.getAllByRole("row").length).toBeLessThan(100);
@@ -113,14 +113,17 @@ test("Markdown uses the existing renderer", async () => {
   expect(screen.getByText("Ready").closest("strong")).not.toBeNull();
 });
 
-test("pictures toggle actual size and release their URL on close", async () => {
+test.each([["png", "image/png"], ["svg", "image/svg+xml"]])("%s pictures use image blobs, toggle size and release their URL", async (extension, mime) => {
   const revoke = vi.fn();
-  vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:picture"), revokeObjectURL: revoke });
-  vi.mocked(fileViewInfo).mockResolvedValue(info("image", "picture.png"));
+  const create = vi.fn((_blob: Blob) => "blob:picture");
+  vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: revoke });
+  vi.mocked(fileViewInfo).mockResolvedValue(info("image", `picture.${extension}`));
   vi.mocked(fileViewBytes).mockResolvedValue(new ArrayBuffer(4));
-  const { unmount } = render(<FileViewer path="/picture.png" />);
+  const { unmount } = render(<FileViewer path={`/picture.${extension}`} />);
   fireEvent.click(await screen.findByRole("button", { name: en["fileView.actualSize"] }));
   expect(screen.getByRole("button", { name: en["fileView.fitWidth"] }).getAttribute("aria-pressed")).toBe("true");
+  expect(create.mock.calls[0][0].type).toBe(mime);
+  expect(screen.getByRole("img").getAttribute("src")).toBe("blob:picture");
   unmount(); expect(revoke).toHaveBeenCalledWith("blob:picture");
 });
 
@@ -220,4 +223,13 @@ test("PDF trace rectangles use bottom-left PDF points, follow zoom, and preserve
     await waitFor(() => expect(fileViewInfo).toHaveBeenLastCalledWith("/old.pdf"));
     expect(screen.queryByRole("button", { name: en["fileView.trace"] })).toBeNull();
   } finally { window.removeEventListener("qiyas:trace", listener); }
+});
+
+
+test.each(["dwg", "dxf"])("drawing outputs offer the external opener without reading binary %s as text", async (extension) => {
+  vi.mocked(fileViewInfo).mockResolvedValue(info("drawing", `tower.${extension}`));
+  render(<FileViewer path={`/tower.${extension}`} />);
+  expect(await screen.findByText(en["fileView.externalOnly"])).toBeTruthy();
+  expect(fileViewBytes).not.toHaveBeenCalled();
+  expect(fileViewWorkbook).not.toHaveBeenCalled();
 });

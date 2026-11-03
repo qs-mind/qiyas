@@ -14,7 +14,7 @@ Moved here from the team's memory so they live with the code; later sections giv
 - Step by step, never all at once: one floor, one part, small tool results. A single huge read or action is a bug (a 1.3 MB result once filled Mizan's context and it stopped early).
 - Mizan starts drawing at once, floor by floor, and checks each part after it is drawn.
 - Each step line says in plain words what Mizan drew, read or changed, with its numbers; never a bare "Read the drawing" or "Updated the drawing".
-- No assumptions of its own: ask at the step that needs the fact; assume only when the engineer says so, and write each assumption down (sheet notes and the answer).
+- Never invent brief facts. Ask for missing concept or scope facts at the step that needs them; record engineer-authorized assumptions on the sheets and in the answer. Technical design follows Mizan autonomy and trust below.
 - Sheets are tidy: no overlaps, a title block on every sheet, every sheet named (never Untitled), marked for review. Qiyas draws and takes off; loads, design and approval are the engineer's.
 - The ribbon starts collapsed.
 - Examples, demos and tests use mega projects and extreme cases, never a villa or a small building.
@@ -89,18 +89,11 @@ clipboard-win's and error-code's BSL-1.0); add one there for every new non-MIT l
 Samples: `samples/test-plan.dwg` (written by `cargo run -p qiyas-core --example write_test_plan`) and `samples/test-boq.xlsx` (written by `cargo run -p qiyas-boq --example write_test_boq`); the exact quantities and the two conflicts the BOQ must give are in `samples/test-plan.md`. `cargo run -p qiyas-ai --example phase2_walkthrough` measures, imports, links and compares them through the AI tools, no model needed.
 
 Frontend layout: `src/main.tsx` renders `src/app/App.tsx`, the composition root (`src/App.tsx`
-re-exports it). It calls the hooks in `src/app/` in this order, which keeps their effects in the
-order they always ran: `useShell`, `useOptions`, `useFileTabs`, `useAutosave`, `useDrafting`,
-`useTakeoffState`, `useSheets`, `useLayers`, `useToolChoice`, `useAttach`, `useBlocks`,
-`useAnnotate`, `useParametric`, `useCommands`, `useTool`, `useAssistantWiring`, `useDrawings`, `useTakeoff`,
-`usePlot`, `useCommandLine`, `useSelection`, `useOverlay`. It hands `apply`, `onCommand` and
-the tool's `cancel` to hooks made before them through refs filled right after they exist, and
-renders `Header`, `Dialogs` and `Panels`. Dialogs and panels themselves are in `src/shell/`, the canvas
-in `src/viewport/`, the tools in `src/tools/`; `src/app/App.test.tsx` checks the wiring. It uses condition waits and a file-only 30-second
-test timeout because it renders the whole shell; the five-repeat load check uses two workers. The
-three late refs are `measureRef` (`useSheets` cancels the tool when the sheet changes), `applyRef`
-(`useBlocks`, `useAnnotate`) and `onCommandRef` (the tool palette in `useBlocks`); they are called
-with `?.`, so a missing fill still type-checks, and `App.test.tsx` has a test for each.
+re-exports it). `DialogsProvider` wraps the app; hooks in `src/app/` own the drawing, tools,
+assistant, file tabs, output panels and their wiring. `Header`, `Dialogs` and `Panels` compose
+components from `src/shell/`; the canvas is in `src/viewport/`, tools in `src/tools/`.
+Late refs connect hooks that need a later hook's callbacks; `src/app/App.test.tsx` covers those
+handoffs. It uses condition waits and a file-only 30-second timeout for the full shell.
 
 The ribbon dispatches built-in command IDs through `onAction`, with `isEnabled` and `isPressed`
 lookups. `ribbonLayout.ts` derives their types from the default data; `app/Header.tsx` supplies
@@ -2342,18 +2335,13 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
   emits a `plan` event; the panel shows the latest snapshot above that turn's answer and keeps
   it in conversation history. Titles are the model's words; status labels are English/Arabic,
   styled with brand tokens and no motion dependency.
-- Mizan plans in words before drafting: parts or rooms and their sizes, checked against the
-  user's numbers. Then it works one phase at a time, one batch per phase. Applicable phases
-  include grid, outer walls, inner walls, openings, rooms, dimensions/table and sheet; other
-  drafting follows the same loop. After each phase it captures, checks and fixes by handle
-  before continuing. It never draws trial geometry and undoes it to discover behaviour:
-  validation and wall reads supply that information. Openings are added to existing walls.
-  Both prompt languages enforce this rule within the 900-word budget.
+- Mizan starts drawing one floor and part at a time, with one active work phase. The prompts
+  describe drawing craft, component reuse and checks under "Mizan autonomy and trust" below.
 - A batch is one undo step, all or nothing, and can read earlier results through
   `{"$step": 0, "pointer": "/added/0"}`. `Session::batch_with` sets the batch's layer and colour,
   making a missing layer, then puts the previous current state back. Errors name the field,
   schema and example; unknown names suggest close matches. Changed geometry comes with a
-  drawing check. The loop discovers a command, acts, checks and fixes by handle.
+  drawing check. The drawing kit supplies common command forms; discovery fills missing details.
 - Before execution, the core checks all fields together against the command registry: missing
   fields, wrong values and ranges are errors with JSON pointers; unknown fields are warnings
   on reads and errors on edits. Results include `defaults_used` with each field, value and unit. Errors preserve
@@ -2414,16 +2402,10 @@ cancels the queue and shows the current drawing. Mutation refreshes also sync la
 - AI measurements are marked `ai`; the card's Undo only undoes when the last step is the AI's.
 - The in-app agent is called Mizan (ميزان): the side tab, the panel and the system prompt use the
   name; code keeps `assistant` / `useAssistant`.
-- Mizan never assumes on its own (founder, 28 October 2026): engineering decisions are the
-  engineer's. It assumes only when the engineer asks it to assume or to use best practice, and then
-  writes each assumption down. When a step needs a missing fact or decision it stops at that step
-  and calls `qiyas_execute ask` once, with every question that step needs together (see "W1:
-  Mizan's behaviour and cost" below); the turn ends and the answer is the next message. A plain
-  text question still ends the turn cleanly (`agent.rs` test `a_question_ends_the_turn_cleanly...`).
-  The fixed prompt
-  stays under 900 words (a test, excluding the index), in `prompt_en.txt` and `prompt_ar.txt`.
-  Both languages append the registry's deterministic `index_text()` under "Commands by category",
-  then the drawing facts. The stable index keeps prompt caching working.
+- Prompts live in `prompt_en.txt` and `prompt_ar.txt`, each below 900 words excluding the index.
+  Both append the registry's deterministic `index_text()` under "Commands by category", then
+  drawing facts. The stable index supports prompt caching. Technical decisions and questions
+  follow "Mizan autonomy and trust"; `ask` ends the turn and takes the answer next turn.
 - Mizan's eyes (`qiyas-ai/src/image.rs`, `marks.rs`, `capture.rs` `picture`): `qiyas_capture` source picture draws a
   sheet (`sheet`, by layout or block name; the one on screen by default; it never moves the
   user's view) as the engineer sees it on white: model space inside a layout's viewports
@@ -3089,8 +3071,8 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   and arrows touching measured geometry are allowed.
 - Added `annotation_overlap`, `annotation_over_grid`, `label_outside_room` and
   `object_tag_mismatch`. The minimum readable text height is 2.5 mm on paper. Annotation
-  warnings introduced in a Mizan phase join its existing error gate. Automatic results report
-  `layout_findings` and coverage; the English/Arabic prompts add only a short repair note.
+  warnings introduced in a Mizan phase join its reported open findings. Automatic results report
+  `layout_findings` and coverage; findings do not prevent phase completion.
 - Registry `free_space {size:[w,h] | entity, near?, side?:any|right|below, clearance_mm?,
   sheet?, within?}` reads without changing drawing/history. Size and coordinates are drawing
   units; clearance is paper mm (default 2.5). It returns up to eight ranked top-left positions,
@@ -3637,9 +3619,7 @@ Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas
   {questions}` and ends the turn (no `Done`; the desktop shows status "waiting"); the answer is the
   next user message. The panel shows a numbered list with lettered options (`kind: "question"` in
   `ai/messages.ts`); the new shell renders the real design. MCP clients get the echoed questions.
-- Superseded 29 October 2026 (see "Mizan autonomy and trust" below): Mizan decides technical
-  design itself and asks only about the idea. `[state]` `Country/practice` says whether it came
-  from Settings, was inferred from the method name, or is not set.
+- `[state]` `Country/practice` names its source: Settings, the method name, or not set.
 - Open phases (`plan_watch.rs` `finish_gate`, `agent.rs` `end_gate`, `mcp.rs`): one factual
   reminder per user turn naming the open phases; nothing is refused. No reminder when Mizan asked
   this turn, the user said stop (`judgement::wants_to_stop`) or a metered run says `[finish now]`.
@@ -3649,10 +3629,10 @@ Evidence, the founder's live runs and the offline replay: `docs/2026-10-26-qiyas
 - Reply language: the latest message decides. Answers are never sent back for language.
 - Saving (`agent.rs` `keep_work`): after a finished phase that changed a titled drawing the agent
   saves through the host; an untitled or repaired one is never saved and Save As never opens
-  (founder, 28 October 2026): the engineer saves it when they choose. Nothing is saved when Mizan changed nothing. The app, not Mizan, says at the end of the turn what was saved, or why an untitled or repaired drawing was not; the prompts forbid Mizan to state save status.
+  (founder, 28 October 2026): the engineer saves it when they choose. Nothing is saved when Mizan changed nothing. The app, not Mizan, says at the end of the turn what was saved, or why an untitled or repaired drawing was not.
 - Drawing on assumptions the engineer allowed: Mizan puts them on the sheet as general
-  notes (title block status "For review") and lists them in the answer. Qiyas draws; loads, design
-  calculations and approval are the engineer's and the company's (company policy).
+  notes (title block status "For review") and lists them in the answer. The engineer retains
+  responsibility for loads, design calculations and approval.
 - Exports (`surface.rs` `quantity_gate`): never refused for open checks. When `takeoff_check`
   reports measurement errors, unmatched schedule rows, unmeasured elements or disputed second
   readings, Qiyas itself prefixes the file name with `DRAFT ` and returns `outstanding_checks`.
@@ -3706,18 +3686,22 @@ React app with a faked IPC are in `.local/w4/` (`stub.js`, `shoot.mjs`).
   Ctrl+F1 collapses it (`qiyas.ribbon.collapsed`); a tab clicked while collapsed shows its panel over
   the drawing until Esc, a click elsewhere or a tool. Layout tabs (`SheetTabs`): no scrollbar; the
   edge with more fades and has an arrow. Layer names wrap and are their own tooltip.
-- Built-in file viewer (28 Oct 2026): a written file in the Artifacts menu (or the output head's
-  switch) opens inside Mizan's column, never in another app (`shell/FileViewer.tsx`): PDF pages drawn
-  by pdfium as they scroll into view (IPC `file_view_pdf_page`, the `underlay_image` byte layout,
-  200 to 2400 px wide), workbooks as sheet tabs (`file_view_workbook`, `qiyas_boq::preview`, at most
-  5000 rows and 80 columns a sheet, hidden sheets left out), images, CSV as a table, Markdown and
-  text (`file_view_bytes`, 25 MB and 2 MB). `file_view_info` gives kind, name, size and pages.
-  Paths are absolute, canonical, regular files with one of pdf, xlsx, xlsm, xls, csv, txt, md, json,
-  png, jpg, jpeg, webp, gif (`output_files.rs`); "Show in folder" stays.
+- Output files: `shell/outputFiles.ts` and `qiyas-ai/src/output_files.rs` take `written` only
+  from a successful execute result's top-level field (one path or a flat path list). Nested data,
+  reads, inputs and model text grant no file access. The agent records canonical paths in the
+  conversation's `written_files`, retained through history trimming and resume. All file preview,
+  open and reveal IPC checks require that record, an allowed output folder and a regular file.
+  Old conversations without a confirmed-write record cannot open their old output cards; regenerate
+  the output to establish it. Macro and executable formats are excluded, including xls, xlsm,
+  xlsb and docm. The allowlist is pdf, xlsx, dwg, dxf, svg, png, jpg, jpeg, webp, gif, csv, txt, md, json.
+  `shell/FileViewer.tsx` previews PDF pages with pdfium (200 to 2400 px), xlsx sheets (5000 rows,
+  80 columns, hidden sheets omitted), images, CSV tables, Markdown and text. Image/text reads are
+  capped at 25/2 MB. DWG/DXF cards direct the user to Open file; Open file and Show in folder
+  use the same native checks. SVG previews use image blobs, never inline markup.
 - No long dash in Mizan's words (founder, 28 Oct 2026): both prompts forbid "—"; `qiyas-ai/src/dashes.rs`
   turns —, – and ― into "-" in every text, question, plan and refusal event, and `content.tsx`
   `plainDashes` does the same for saved chats. Qiyas's own client text (BOQ descriptions, evidence
-  PDF, code register quotes) uses " - " too.
+  PDF) uses " - " too.
 - Settings is in sections (`SettingsDialog`, a vertical Base UI Tabs: Mizan, Measurement, General,
   Connected apps, Support; every panel `keepMounted`, so Save reads them all).
 - "Connect an AI app" (`shell/ConnectAiDialog.tsx`; plug in the top bar, `/connect`, the empty chat):
@@ -3758,7 +3742,7 @@ before a heavy step and never take a timing during a pause.
   status bar follows it (`usePointer`); the app renders on a move only while a tool needs the cursor
   (`needsPointer` in `useTool`: a snap, points in progress or a tool state). A bare move used to render the
   whole window. Do not put the cursor, a hover or any per-move value in a hook the app's root calls. The
-  ribbon takes its handlers through `useStableCallbacks` and is `memo`; `Markdown` is `memo`.
+  ribbon is memoized and compares action enablement and pressed states; `Markdown` is memoized.
   `tools/pointerMove.test.tsx` counts renders.
 - The layers panel renders only the rows in view (`@tanstack/react-virtual`; headless-tree's `scrollToItem`
   mounts the row a key moves to). `data-layer-state` (Mizan's `panel_state`) still lists every row and is
@@ -3834,8 +3818,8 @@ review of a take-off; every evidence page carries For review / للمراجعة.
 
 - Blind second reading: `crates/qiyas-core/src/second_reading.rs` stores the readings, compares
   them within the tolerance for the unit, and raises a drawing query when they differ. An
-  unresolved disagreement stays out of the generated BOQ. `crates/qiyas-ai/src/blind_reader.rs`
-  runs a fresh reader with no conversation history and only drawing reads; it gets the item's
+  unresolved disagreement stays in the generated BOQ with both readings marked for review.
+  `crates/qiyas-ai/src/blind_reader.rs` runs a fresh reader with no conversation history and only drawing reads; it gets the item's
   description, unit and rule, never the first quantity. The BOQ says agrees, differs or not
   checked. Scripted-provider coverage is in `crates/qiyas-ai/tests/w3.rs`; core coverage is in
   `crates/qiyas-core/tests/w3_output.rs`.

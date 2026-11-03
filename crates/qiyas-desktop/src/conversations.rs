@@ -365,6 +365,7 @@ mod tests {
                 images: Vec::new(),
             }],
             phase_state: Default::default(),
+            written_files: Default::default(),
         }
     }
 
