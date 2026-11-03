@@ -418,6 +418,22 @@ impl RetryBackoff {
     }
 }
 
+tokio::task_local! {
+    static RETRY_DELAY: Duration;
+}
+
+/// Inject the wait for offline retry tests without changing the schedule or retry budget.
+/// The override is scoped to this future, not other tasks or concurrently running tests.
+#[doc(hidden)]
+pub async fn with_retry_delay<F: Future>(delay: Duration, future: F) -> F::Output {
+    RETRY_DELAY.scope(delay, future).await
+}
+
+pub(crate) async fn wait_for_retry(delay: Duration) {
+    let delay = RETRY_DELAY.try_with(|injected| *injected).unwrap_or(delay);
+    tokio::time::sleep(delay).await;
+}
+
 /// The HTTP client both providers use: rustls with the `ring` crypto provider.
 pub(crate) fn http_client() -> reqwest::Client {
     static PROVIDER: Once = Once::new();
@@ -481,7 +497,7 @@ pub(crate) async fn send_with_retry(
             diagnostic: error.to_string(),
             discard_partial: false,
         });
-        tokio::time::sleep(delay).await;
+        wait_for_retry(delay).await;
     }
 }
 
@@ -530,7 +546,7 @@ pub(crate) async fn retry_stream(
         diagnostic: error.to_string(),
         discard_partial,
     });
-    tokio::time::sleep(delay).await;
+    wait_for_retry(delay).await;
     true
 }
 
@@ -799,6 +815,30 @@ impl SseReader {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn injected_retry_wait_keeps_the_budget_and_stays_in_its_task() {
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            with_retry_delay(Duration::ZERO, async {
+                let mut backoff = RetryBackoff::default();
+                for seconds in [5, 15, 45, 55] {
+                    let delay = backoff.next_delay(None, Duration::ZERO).unwrap();
+                    assert_eq!(delay, Duration::from_secs(seconds));
+                    wait_for_retry(delay).await;
+                }
+                assert!(backoff.next_delay(None, Duration::ZERO).is_none());
+                tokio::spawn(async {
+                    assert!(RETRY_DELAY.try_with(|delay| *delay).is_err());
+                })
+                .await
+                .unwrap();
+            }),
+        )
+        .await
+        .expect("injected retries must not wait real seconds");
+        assert!(RETRY_DELAY.try_with(|delay| *delay).is_err());
+    }
 
     #[tokio::test]
     async fn retry_after_reaches_the_window_without_confusing_api_credit_exhaustion() {

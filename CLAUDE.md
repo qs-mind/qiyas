@@ -3338,6 +3338,10 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   message IDs deduplicate usage across resume attempts. Local agents never receive a generic
   restart. Provider adapters own transport backoff; hosts without one retry Temporary failures
   inside the same autonomous turn. Successful and incomplete request usage is counted once.
+  Offline retry tests inject a task-scoped zero wait; the reported delays, attempt limit and
+  two-minute budget stay unchanged. Other tasks and production keep real backoff waits.
+  Anthropic `message_stop` can omit `stop_reason` when every content block is finished;
+  completed tool calls still run. Unfinished blocks without a reason remain a stream failure.
 - A completed response with no answer, refusal or call fails with `ai.error.chatgpt_empty` in
   English/Arabic. The support log records item types and usage, never encrypted reasoning or
   authentication material. Possible credential prefixes are held across text/thinking deltas,

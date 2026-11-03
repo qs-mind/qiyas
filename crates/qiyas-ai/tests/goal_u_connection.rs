@@ -1,4 +1,4 @@
-//! A dropped answer keeps completed drawing work when the engineer presses Continue.
+//! A dropped answer retries within the turn without repeating completed drawing work.
 use qiyas_ai::{
     Agent, AgentEvent, AgentSettings, AiError, ContentBlock, Provider, StopReason, StreamEvent,
     TurnRequest, TurnResult,
@@ -12,7 +12,7 @@ use std::sync::{
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-struct DropThenContinue(AtomicUsize);
+struct DropThenContinue(Arc<AtomicUsize>);
 impl Provider for DropThenContinue {
     fn stream_turn<'a>(
         &'a self,
@@ -26,7 +26,7 @@ impl Provider for DropThenContinue {
                     "The first line is ready. Next".into(),
                 ));
                 return Err(AiError::Stream(
-                    "connection closed after bounded retries".into(),
+                    "connection closed before the answer finished".into(),
                 ));
             }
             if step >= 2 {
@@ -35,7 +35,7 @@ impl Provider for DropThenContinue {
                 ).count();
                 assert_eq!(
                     completed, 1,
-                    "Continue must retain exactly one completed first step"
+                    "Retry must retain exactly one completed first step"
                 );
             }
             let content = match step {
@@ -74,21 +74,24 @@ async fn u16_continue_after_a_drop_finishes_without_repeating_the_completed_edit
         &dir.path().join("drawing.dxf"),
         6,
     ))));
+    let requests = Arc::new(AtomicUsize::new(0));
     let mut agent = Agent::new(
-        Box::new(DropThenContinue(AtomicUsize::new(0))),
+        Box::new(DropThenContinue(requests.clone())),
         session.clone(),
         AgentSettings::default(),
     );
     let (tx, mut events) = mpsc::channel(1000);
-    let error = agent
-        .run_turn(
+    qiyas_ai::provider::with_retry_delay(
+        std::time::Duration::ZERO,
+        agent.run_turn(
             "Draw two lines, one at a time.".into(),
             tx,
             CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), "stream");
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 4);
     let count = || {
         session
             .lock()
@@ -100,25 +103,25 @@ async fn u16_continue_after_a_drop_finishes_without_repeating_the_completed_edit
             .entities_in_block("*Model_Space")
             .count()
     };
-    assert_eq!(count(), 1);
-
-    let (tx, mut continued) = mpsc::channel(1000);
-    agent
-        .run_turn(
-            "Continue from the last completed step. Keep the finished work.".into(),
-            tx,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
     assert_eq!(count(), 2);
     let mut all = vec![];
     while let Ok(event) = events.try_recv() {
         all.push(event);
     }
-    while let Ok(event) = continued.try_recv() {
-        all.push(event);
-    }
+    assert_eq!(
+        all.iter()
+            .filter(|e| matches!(
+                e,
+                AgentEvent::Retrying {
+                    seconds: 5,
+                    discard_partial: true,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert!(all.iter().any(|e| matches!(e, AgentEvent::Done { .. })));
     let calls: Vec<_> = all
         .iter()
         .filter_map(|e| match e {

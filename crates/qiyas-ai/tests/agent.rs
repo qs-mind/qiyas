@@ -268,9 +268,11 @@ fn sample() -> (tempfile::TempDir, Arc<Mutex<Option<Session>>>) {
 /// Runs one user turn and returns its result and every event it sent.
 async fn turn(agent: &mut Agent, text: &str) -> (Result<(), AiError>, Vec<AgentEvent>) {
     let (tx, mut rx) = mpsc::channel(10_000);
-    let result = agent
-        .run_turn(text.to_string(), tx, CancellationToken::new())
-        .await;
+    let result = qiyas_ai::provider::with_retry_delay(
+        Duration::ZERO,
+        agent.run_turn(text.to_string(), tx, CancellationToken::new()),
+    )
+    .await;
     let mut events = Vec::new();
     while let Ok(e) = rx.try_recv() {
         events.push(e);
@@ -961,10 +963,22 @@ async fn api_key_absent_from_logs_and_errors() {
         errors.push(e);
 
         // And through the agent.
-        let (_dir, session) = sample();
-        let mut agent = Agent::new(Box::new(provider), session, AgentSettings::default());
+        let (dir, session) = sample();
+        let log = qiyas_ai::AgentLog::new(dir.path().join("retry.log"));
+        let mut agent = Agent::new(Box::new(provider), session, AgentSettings::default())
+            .with_log(log.clone());
+        let before = mock.requests().len();
         let (result, events) = turn(&mut agent, "hi").await;
         errors.push(result.unwrap_err());
+        assert_eq!(mock.requests().len() - before, 5);
+        let delays: Vec<_> = events.iter().filter_map(|event| match event {
+            AgentEvent::Retrying { seconds, .. } => Some(*seconds),
+            _ => None,
+        }).collect();
+        assert_eq!(delays, [5, 15, 45, 55]);
+        let saved = std::fs::read_to_string(log.path()).unwrap();
+        assert!(!saved.contains(KEY));
+        assert!(!saved.contains("SECRET"));
 
         for e in &errors {
             for text in [e.to_string(), format!("{e:?}")] {
@@ -2473,10 +2487,12 @@ async fn a_broken_api_stream_retries_and_counts_each_reported_usage_snapshot_onc
         ])],
     };
     let mut events = Vec::new();
-    let result = provider
-        .stream_turn(req, &mut |event| events.push(event))
-        .await
-        .unwrap();
+    let result = qiyas_ai::provider::with_retry_delay(
+        Duration::ZERO,
+        provider.stream_turn(req, &mut |event| events.push(event)),
+    )
+    .await
+    .unwrap();
     assert_eq!(mock.requests().len(), 2);
     assert_eq!(result.usage.output_tokens, 46);
     assert_eq!(result.usage.total_input(), 200);

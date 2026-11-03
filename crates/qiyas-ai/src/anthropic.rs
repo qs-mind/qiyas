@@ -423,9 +423,9 @@ impl Turn {
                 self.read_usage(&e["usage"]);
             }
             "message_stop" => {
-                if self.stop_reason.is_none() {
+                if self.stop_reason.is_none() && !self.building.is_empty() {
                     return Err(AiError::Stream(
-                        "connection closed without stop_reason".into(),
+                        "message stopped with unfinished content and no stop_reason".into(),
                     ));
                 }
                 sink(StreamEvent::Done);
@@ -488,7 +488,15 @@ impl Turn {
             })
             .collect();
         let stop_reason = match self.stop_reason.as_deref() {
-            Some("end_turn") | Some("stop_sequence") | None => StopReason::EndTurn,
+            Some("end_turn") | Some("stop_sequence") => StopReason::EndTurn,
+            None => {
+                let message = Message::assistant(content.clone());
+                if message.tool_uses().next().is_some() {
+                    StopReason::ToolUse
+                } else {
+                    StopReason::EndTurn
+                }
+            }
             Some("tool_use") => StopReason::ToolUse,
             Some("max_tokens") => crate::stream_recovery::stop("anthropic", "max_tokens"),
             Some("content_filter") => crate::stream_recovery::stop("anthropic", "content_filter"),
@@ -704,6 +712,39 @@ mod tests {
             block_json(&result.content[1]),
             json!({"type":"thinking","thinking":"hm","signature":"sig"})
         );
+        assert_eq!(result.stop_reason, StopReason::EndTurn);
+    }
+
+    #[test]
+    fn message_stop_without_a_reason_requires_finished_blocks() {
+        let tool = json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"list_sheets","input":{}}});
+        let (result, seen) = run(&[
+            tool.clone(),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_stop"}),
+        ]);
+        assert_eq!(result.stop_reason, StopReason::ToolUse);
+        assert_eq!(Message::assistant(result.content).tool_uses().count(), 1);
+        assert!(seen.contains(&StreamEvent::Done));
+
+        for block in [
+            tool,
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"Partial"}}),
+        ] {
+            let mut turn = Turn::default();
+            let mut seen = Vec::new();
+            turn.on_event(&block.to_string(), &mut |e| seen.push(e))
+                .unwrap();
+            let error = turn
+                .on_event(&json!({"type":"message_stop"}).to_string(), &mut |e| {
+                    seen.push(e)
+                })
+                .unwrap_err();
+            assert_eq!(error.code(), "stream");
+            assert!(!seen
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Done | StreamEvent::ToolUse { .. })));
+        }
     }
 
     #[test]

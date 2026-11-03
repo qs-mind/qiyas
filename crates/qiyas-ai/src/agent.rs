@@ -1160,7 +1160,7 @@ impl Agent {
                             .await;
                             tokio::select! {
                                 _ = cancel.cancelled() => return self.stop(&events, "cancelled").await,
-                                _ = tokio::time::sleep(delay) => {}
+                                _ = crate::provider::wait_for_retry(delay) => {}
                             }
                             repeat_request = Some(sent_request);
                             continue;
@@ -4330,14 +4330,16 @@ mod provider_failure_tests {
             AgentSettings::default(),
         );
         let (tx, mut rx) = mpsc::channel(100);
-        agent
-            .run_turn(
+        crate::provider::with_retry_delay(
+            std::time::Duration::ZERO,
+            agent.run_turn(
                 "Continue the terminal sheets".into(),
                 tx,
                 CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+            ),
+        )
+        .await
+        .unwrap();
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
         let mut total = 0;
         let mut retries = 0;

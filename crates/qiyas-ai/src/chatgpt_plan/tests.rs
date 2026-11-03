@@ -422,10 +422,12 @@ async fn mock_http_and_stream_failures_retry_with_stable_headers_and_discard_par
     .await;
     let provider = ChatgptPlan::new(memory(tokens), local_protocol(&base));
     let mut seen = Vec::new();
-    let result = provider
-        .stream_turn(request(), &mut |e| seen.push(e))
-        .await
-        .unwrap();
+    let result = crate::provider::with_retry_delay(
+        std::time::Duration::ZERO,
+        provider.stream_turn(request(), &mut |e| seen.push(e)),
+    )
+    .await
+    .unwrap();
     assert!(
         matches!(result.content.as_slice(), [ContentBlock::Text { text }]
         if text == "Finished answer")
@@ -743,26 +745,68 @@ async fn mock_admission_limit_stops_next_request_and_401_keeps_credentials() {
 #[tokio::test]
 async fn mock_broken_stream_never_succeeds_or_executes_partial_tools() {
     let _serial = SERIAL.lock().await;
-    let (base, server) = mock_server(vec![(
-        200,
-        json!("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Partial\"}\n\n"),
-    )])
-    .await;
+    let partial = [
+        json!({"type":"response.output_text.delta","output_index":0,"delta":"Partial"}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"item-1","call_id":"call-1","name":"qiyas_execute","arguments":""}}),
+        json!({"type":"response.function_call_arguments.delta","output_index":1,"item_id":"item-1","delta":"{\"op\":\"run\",\"args\":"}),
+    ].iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+    let (base, server) = mock_server(vec![(200, json!(partial))]).await;
     let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
     let mut events = Vec::new();
+    let error = crate::provider::with_retry_delay(
+        std::time::Duration::ZERO,
+        provider.stream_turn(request(), &mut |e| events.push(e)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "chatgpt_offline");
     assert_eq!(
-        provider
-            .stream_turn(request(), &mut |e| events.push(e))
-            .await
-            .unwrap_err()
-            .code(),
-        "chatgpt_incomplete"
+        error.public_error().failure.kind,
+        crate::provider_error::FailureKind::Offline
     );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        crate::StreamEvent::Retrying {
+            seconds: 5,
+            discard_partial: true,
+            ..
+        }
+    )));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, crate::StreamEvent::ToolInputDelta { .. })));
     assert!(!events.iter().any(|e| matches!(
         e,
         crate::StreamEvent::Done | crate::StreamEvent::ToolUse { .. }
     )));
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn mock_malformed_item_is_a_parse_error_without_retrying_or_executing_tools() {
+    let _serial = SERIAL.lock().await;
+    let event = json!({"type":"response.output_item.done","output_index":0,"item":"malformed"});
+    let (base, server) = mock_server(vec![(200, json!(format!("data: {event}\n\n")))]).await;
+    let provider = ChatgptPlan::new(memory(tokens(&[PLAN_SCOPE])), local_protocol(&base));
+    let mut events = Vec::new();
+    let error = crate::provider::with_retry_delay(
+        std::time::Duration::ZERO,
+        provider.stream_turn(request(), &mut |e| events.push(e)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "stream_parse");
+    assert_eq!(
+        error.public_error().failure.kind,
+        crate::provider_error::FailureKind::Other
+    );
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        crate::StreamEvent::Retrying { .. }
+            | crate::StreamEvent::Done
+            | crate::StreamEvent::ToolUse { .. }
+    )));
+    assert_eq!(server.await.unwrap().len(), 1);
 }
 
 #[tokio::test]

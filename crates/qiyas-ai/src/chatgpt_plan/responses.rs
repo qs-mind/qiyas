@@ -183,7 +183,7 @@ pub(super) async fn stream(
                     diagnostic: e.public_error().message,
                     discard_partial: true,
                 });
-                tokio::time::sleep(wait).await;
+                crate::provider::wait_for_retry(wait).await;
             }
             result => {
                 return result.map(|mut turn| {
@@ -440,7 +440,7 @@ pub(super) async fn models(endpoint: &str, tokens: &Tokens) -> Result<Vec<PlanMo
         else {
             return Err(result);
         };
-        tokio::time::sleep(wait).await;
+        crate::provider::wait_for_retry(wait).await;
     }
 }
 fn visible_models(value: Value) -> Result<Vec<PlanModel>, AiError> {

@@ -137,12 +137,6 @@ fn recorded_schema_mistakes_name_the_right_field_or_shape() {
     let cases = [
         (READ, "records", json!({"collection":"entity"}), "entities"),
         (EXECUTE, "batch", json!({"commands":[],"color":4}), "color"),
-        (
-            READ,
-            "check",
-            json!({"rules":["zero_length","opening_outside_wall"]}),
-            "tiny_segment",
-        ),
     ];
     for (tool, op, args, field) in cases {
         let (args, _) = crate::normalise::args(tool, op, &args).unwrap();
@@ -150,6 +144,21 @@ fn recorded_schema_mistakes_name_the_right_field_or_shape() {
             .unwrap_err()
             .to_string();
         assert!(error.contains(field), "{op}: {error}");
+    }
+    let input = json!({"rules":["zero_length","opening_outside_wall"]});
+    let (args, _) = crate::normalise::args(READ, "check", &input).unwrap();
+    let warnings = crate::surface_args::validate(READ, "check", &args).unwrap();
+    assert_eq!(warnings.len(), 2);
+    for (index, rule) in ["zero_length", "opening_outside_wall"]
+        .into_iter()
+        .enumerate()
+    {
+        let warning = &warnings[index];
+        assert_eq!(warning.code, "unknown_rule");
+        assert_eq!(warning.pointer, format!("/args/rules/{index}"));
+        assert!(warning.message.contains("Skipped unknown check rule"));
+        assert!(warning.message.contains(rule));
+        assert!(warning.message.contains("tiny_segment"));
     }
     // Single-key filters now have one unambiguous path/value interpretation.
     for (query, expected) in [

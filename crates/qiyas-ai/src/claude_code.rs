@@ -565,16 +565,15 @@ impl ClaudeCode {
             sink(StreamEvent::Retrying {
                 seconds: delay.as_secs(),
                 code: if broken {
-                    "ai.error.claude_stream"
+                    error("claude_stream").public_error().code
                 } else {
-                    "ai.error.output_limit"
-                }
-                .into(),
+                    error("output_limit").public_error().code
+                },
                 diagnostic: "Resume the existing Claude Code session; retain completed work."
                     .into(),
                 discard_partial: false,
             });
-            tokio::time::sleep(delay).await;
+            crate::provider::wait_for_retry(delay).await;
             req.messages = vec![crate::Message::user(vec![ContentBlock::Text {
                 text: crate::stream_recovery::continuation(false),
             }])];
@@ -1535,17 +1534,19 @@ mod tests {
             {"events":[{"type":"assistant","message":{"id":"second","stop_reason":"end_turn","content":[{"type":"text","text":"Sheets ready."}],"usage":{"input_tokens":120,"output_tokens":25}}},{"type":"result","subtype":"success","usage":{"input_tokens":120,"output_tokens":25}}]}
         ]}).to_string()).unwrap();
         let mut seen = Vec::new();
-        let result = provider
-            .execute_recovering(
+        let result = crate::provider::with_retry_delay(
+            Duration::ZERO,
+            provider.execute_recovering(
                 request(),
                 dir.path(),
                 &Capabilities { help: help() },
                 config(),
                 permit(),
                 &mut |e| seen.push(e),
-            )
-            .await
-            .unwrap();
+            ),
+        )
+        .await
+        .unwrap();
         assert_eq!(result.usage.output_tokens, 48);
         assert!(seen.iter().any(|e| matches!(
             e,
@@ -2308,6 +2309,7 @@ mod tests {
                 .env("ANTHROPIC_CUSTOM_HEADERS", "fake-header")
                 .env("CLAUDE_CODE_OAUTH_TOKEN", "fake-oauth")
                 .env("CLAUDE_CODE_USE_BEDROCK", "1")
+                .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "999999999")
                 .env("HTTP_PROXY", "https://untrusted.invalid");
             if let Some(path) = std::env::var_os("QIYAS_SUBSCRIPTION_EVIDENCE") {
                 child_test.env("QIYAS_SUBSCRIPTION_EVIDENCE", path);
@@ -2323,8 +2325,9 @@ mod tests {
             assert!(count < 0, "the sentinel credential file was opened");
             assert!(
                 result.status.success(),
-                "{}",
-                String::from_utf8_lossy(&result.stdout)
+                "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
             );
             assert!(
                 !String::from_utf8_lossy(&result.stdout).contains("sentinel-must-never-be-read")
@@ -2406,8 +2409,17 @@ mod tests {
             assert_eq!(call["cwd"], cwd.to_str().unwrap());
             let env = call["environment"].as_object().unwrap();
             assert!(!env.keys().any(|k| k.starts_with("ANTHROPIC_")
-                || k.starts_with("CLAUDE_")
+                || (k.starts_with("CLAUDE_") && k != "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
                 || k.ends_with("_PROXY")));
+            let is_turn = call["argv"].as_array().unwrap().contains(&json!("-p"));
+            if is_turn {
+                assert_eq!(
+                    env.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+                    Some(&json!(request().max_tokens.to_string()))
+                );
+            } else {
+                assert!(!env.contains_key("CLAUDE_CODE_MAX_OUTPUT_TOKENS"));
+            }
         }
         for call in &turns {
             let argv = call["argv"].as_array().unwrap();
@@ -2468,6 +2480,8 @@ mod tests {
         }
         let resumed = turns[1]["argv"].as_array().unwrap();
         let first_argv = turns[0]["argv"].as_array().unwrap();
+        assert!(!first_argv.contains(&json!("--resume")));
+        assert_eq!(resumed.iter().filter(|v| *v == "--resume").count(), 1);
         let config_index = first_argv.iter().position(|v| v == "--mcp-config").unwrap() + 1;
         assert_ne!(first_argv[config_index], resumed[config_index]);
         assert_eq!(
