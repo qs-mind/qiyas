@@ -182,7 +182,7 @@ export function useCommands({
         setNotice(t("param.removed", { n: outcome.ids.length }));
       }
       // Delete says how many it erased, with what the take-off did about them.
-      const erased = cmd.type === "delete_entities" ? t("modify.erased", { n: cmd.targets.length }) : null;
+      const erased = cmd.type === "delete_entities" ? t("modify.erased", { n: (cmd.targets ?? cmd.handles ?? []).length }) : null;
       if (erased && outcome.type !== "takeoff_followed") setNotice(erased);
       if (outcome.type === "exploded" || outcome.type === "takeoff_followed") {
         const notes: string[] = erased ? [erased] : [];

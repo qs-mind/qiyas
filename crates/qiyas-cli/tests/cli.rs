@@ -68,6 +68,18 @@ fn cli(args: &[&str]) -> Output {
         .unwrap()
 }
 
+#[test]
+fn gen_ts_writes_the_registry_contract_without_a_drawing() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("generated/commands.ts");
+    ok(cli(&["gen-ts", "--output", s(&output)]));
+    let expected = qiyas_core::command_types::typescript().unwrap();
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), expected);
+    std::fs::write(&output, "stale contract").unwrap();
+    ok(cli(&["gen-ts", "--output", s(&output)]));
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), expected);
+}
+
 fn s(path: &Path) -> &str {
     path.to_str().unwrap()
 }

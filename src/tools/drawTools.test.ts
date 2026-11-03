@@ -108,13 +108,13 @@ test("polyline takes arcs, closes, and takes back its last point", () => {
   // after heading +X turns left.
   const [arc] = specs("polyline", [pt([0, 0]), pt([2, 0]), opt("A"), pt([2, 2]), opt("L"), pt([0, 2]), finish]);
   expect(arc.kind).toBe("polyline");
-  if (arc.kind !== "polyline") return;
+  if (arc.kind !== "polyline" || !arc.bulges) throw new Error("a polyline with bulges");
   expect(close(arc.bulges[1], 1)).toBe(true);
   expect(arc.bulges[0]).toBe(0);
   expect(arc.bulges[2]).toBe(0);
   // A first segment drawn as an arc starts heading +X: a quarter turn to (1, 1).
   const [first] = specs("polyline", [pt([0, 0]), opt("A"), pt([1, 1]), finish]);
-  if (first.kind !== "polyline") throw new Error("a polyline");
+  if (first.kind !== "polyline" || !first.bulges) throw new Error("a polyline with bulges");
   expect(close(first.bulges[0], Math.tan(Math.PI / 8))).toBe(true);
   // One point is not a polyline.
   expect(specs("polyline", [pt([0, 0]), finish])).toEqual([]);

@@ -287,6 +287,18 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   Per-room defaults carry `{index, name, value}` entries. Revision clouds and comments share
   a default arc length of one thirty-second of their outline; explicit zero is refused.
   Custom hatch rotation/scale default to 0/1; image brightness/contrast/fade to 50/50/0.
+- `src/generated/commands.ts` is the window's wire input contract and command-word list.
+  `qiyas-core/src/command_types.rs` writes it deterministically from the registry's self-contained
+  schemas, including internal commands and every tagged kind. `CommandMap` selects a command or
+  kind by registry name; `Command` is the union discriminated by `type` and `kind`. Optional
+  defaults, nullable values, tuples, maps and input aliases follow the schemas; unconstrained
+  JSON stays `unknown`, including the registry's open batch entries. Numeric bounds and other
+  value constraints remain runtime validation. Unsupported structural schema features fail generation.
+  Refresh from the repository root with `cargo run -p qiyas-cli -- gen-ts` (the shared build rule
+  still applies). `--output PATH` writes elsewhere. The core unit test regenerates in memory and
+  compares the committed file byte for byte, so CI catches drift. `src/api.ts` re-exports these
+  inputs and derives payload aliases; window-only choices and output models stay in the API.
+  The window reads generated words in registry order, with the canonical word before aliases.
 
 ## Records
 

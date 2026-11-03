@@ -15,6 +15,7 @@ mod boq;
 pub mod check;
 mod clipboard;
 pub mod cmdline;
+pub mod command_types;
 mod commands;
 mod comment;
 mod conflict;

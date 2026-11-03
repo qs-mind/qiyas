@@ -1,6 +1,12 @@
 /** Thin wrappers over the Tauri commands of qiyas-desktop (crates/qiyas-desktop/src/commands.rs). */
 import { invoke, setWorkspace, retainWorkspaces } from "./workspaceIpc";
 import type { TraceTarget } from "./boq/trace";
+import { COMMAND_WORDS, type Command, type CommandMap, type CommandWord } from "./generated/commands";
+export type { Command, CommandMap, CommandName, CommandWord } from "./generated/commands";
+
+/** Remove the outer command tag while keeping each kind's own fields. */
+type Payload<T> = T extends unknown ? Omit<T, "type"> : never;
+type CommandPayload<T extends Command["type"]> = Payload<Extract<Command, { type: T }>>;
 
 export type FileViewPdfTracePage = {
   page: number;
@@ -61,39 +67,13 @@ export type ViewportInfo = { handle: number; frozen: string[] };
 
 /** A layer property `set_layer` changes: on, frozen, locked and plot take booleans; color
  *  "ACI n" or "#rrggbb"; linetype a name; lineweight a number. */
-export type LayerProp = "on" | "frozen" | "locked" | "color" | "linetype" | "lineweight" | "plot";
+export type LayerProp = NonNullable<CommandMap["set_layer"]["prop"]>;
 
 /** A property the palette edits (`qiyas_core::EntityProp`). */
-export type EntityProp =
-  | "layer"
-  | "color"
-  | "linetype"
-  | "lineweight"
-  | "text"
-  | "text_height"
-  | "text_rotation"
-  | "text_style"
-  | "radius"
-  | "closed"
-  | "global_width"
-  | "insert_scale"
-  | "insert_rotation"
-  | "dim_style"
-  /** A paper-space viewport's scale (layout units per model unit) and the model point at its
-   *  centre ([x, y]). */
-  | "viewport_scale"
-  | "viewport_centre";
+export type EntityProp = CommandMap["set_property"]["prop"];
 
 /** What match properties copies (`qiyas_core::MatchProp`). */
-export type MatchProp =
-  | "layer"
-  | "color"
-  | "linetype"
-  | "lineweight"
-  | "text_style"
-  | "text_height"
-  | "dim_style"
-  | "hatch_pattern";
+export type MatchProp = CommandMap["match_properties"]["props"][number];
 
 export const MATCH_ALL: MatchProp[] = [
   "layer",
@@ -107,7 +87,7 @@ export const MATCH_ALL: MatchProp[] = [
 ];
 
 /** One line of the layer translator. */
-export type LayerMapping = { from: string; to: string; color?: string | null };
+export type LayerMapping = CommandMap["translate_layers"]["mappings"][number];
 
 export type Units = "inches" | "feet" | "millimetres" | "centimetres" | "metres" | "unknown";
 
@@ -218,21 +198,11 @@ export type DimStyleInfo = { name: string; fields: DimStyleFields };
 
 /** A dimension to add (`qiyas_core::DimSpec`); points in drawing units, `rotation` in degrees
  *  (null: horizontal or vertical by where `line_point` is). */
-export type DimSpec =
-  | { kind: "linear"; p1: P; p2: P; line_point: P; rotation: number | null }
-  | { kind: "aligned"; p1: P; p2: P; offset: number }
-  | { kind: "angular"; vertex: P; p1: P; p2: P; arc_point: P }
-  | { kind: "radius"; target: EntityTarget; point: P }
-  | { kind: "diameter"; target: EntityTarget; point: P }
-  | { kind: "arc_length"; target: EntityTarget; point: P }
-  | { kind: "ordinate"; feature: P; leader_end: P }
-  | { kind: "baseline"; from: EntityTarget; points: P[] }
-  | { kind: "continue"; from: EntityTarget; points: P[] }
-  | { kind: "quick"; targets: EntityTarget[]; line_point: P };
+export type DimSpec = CommandPayload<"dimension">;
 
 /** What a dimension edit changes: its text (`<>` is the measurement, "" clears), its arrows, or
  *  where its text sits. */
-export type DimEditOp = { text_override: string } | "flip" | { move_text: P };
+export type DimEditOp = CommandMap["dim_edit"]["op"];
 
 /** In `problems` when the drawing opened with nothing in model space (`qiyas_core::EMPTY_MODEL`). */
 export const EMPTY_MODEL = "This drawing has no geometry in Model";
@@ -317,14 +287,8 @@ export type TableInfo = {
   fields: [number, number][];
 };
 
-/** A field (`qiyas_core::FieldKind`): today's date, the file name, an entity's area or length,
- *  or a count of a block's references on the sheet. */
-export type FieldKind =
-  | { kind: "date" }
-  | { kind: "file_name" }
-  | { kind: "area"; target: EntityTarget }
-  | { kind: "length"; target: EntityTarget }
-  | { kind: "count"; block: string };
+/** Registry field inputs supported by the window's field dialog. */
+export type FieldKind = Extract<CommandMap["field"]["field"], { kind: "date" | "file_name" | "area" | "length" | "count" }>;
 
 /** What is under the cursor (`qiyas_core::Picked`): the entity, the block references it sits inside
  *  (outermost first, empty on the sheet) and the top-level entity on the sheet. Inside an xref,
@@ -333,34 +297,10 @@ export type FieldKind =
 export type Picked = { top: number; entity: number; chain: number[]; xref: string | null; kind?: string | null };
 
 /** Filter for the session's `find_entities` query and `extract_data`. Names match case-insensitively. */
-export type EntityFilter = {
-  /** Sheet block or layout name; the current sheet when null. */
-  sheet?: string | null;
-  layer?: string | null;
-  kind?: string | null;
-  block_name?: string | null;
-  text_contains?: string | null;
-  /** [[min_x, min_y], [max_x, max_y]]: entities with at least one point inside. */
-  within?: [[number, number], [number, number]] | null;
-  offset?: number;
-  /** Rows per page, at most 500 (5,000 for `extract_data`); 100 when left out. */
-  limit?: number;
-};
+export type EntityFilter = CommandMap["extract_data"]["filter"];
 
 /** One column of `extract_data` (`qiyas_core::Field`): lengths, areas, X and Y in metres. */
-export type Field =
-  | "handle"
-  | "kind"
-  | "layer"
-  | "block_name"
-  | "text"
-  | "length"
-  | "area"
-  | "x"
-  | "y"
-  | "sheet"
-  | "xref"
-  | { attribute: string };
+export type Field = CommandMap["extract_data"]["fields"][number];
 
 /** One entity found. Length and area in drawing units; bounds in world coordinates. */
 export type EntityRow = {
@@ -799,106 +739,24 @@ type P = [number, number];
 
 /** A hatch's fill (`qiyas_core::HatchPattern`): a pattern of the built-in table by name (ANSI31,
  *  ANSI37, LINE, NET, DASH, BRICK) turned by `angle` degrees and scaled by `scale`. */
-export type HatchPattern =
-  | "solid"
-  | "ansi31"
-  | "ansi37"
-  | { custom: { name: string; angle: number; scale: number } };
+export type HatchPattern = NonNullable<CommandMap["draw.hatch"]["pattern"]>;
 
 /** What a draw adds (`qiyas_core::DrawSpec`), in drawing coordinates; angles in degrees. */
-export type DrawSpec =
-  | { kind: "line"; a: P; b: P }
-  /** One bulge per point (the segment starting there), or none. */
-  | { kind: "polyline"; points: P[]; bulges: number[]; closed: boolean }
-  | { kind: "rectangle"; a: P; b: P }
-  | { kind: "polygon"; centre: P; sides: number; radius: number; inscribed: boolean }
-  | { kind: "circle"; centre: P; radius: number }
-  /** Counter-clockwise from `start` to `end`. */
-  | { kind: "arc"; centre: P; radius: number; start: number; end: number }
-  | { kind: "three_point_arc"; a: P; b: P; c: P }
-  /** `major`: the major semi-axis from the centre; `ratio` minor over major (0 to 1]. */
-  | { kind: "ellipse"; centre: P; major: P; ratio: number }
-  | { kind: "spline"; fit_points: P[] }
-  | { kind: "point"; p: P }
-  /** Inner and outer diameters. */
-  | { kind: "donut"; centre: P; inner: number; outer: number }
-  | { kind: "ray"; origin: P; dir: P }
-  | { kind: "xline"; origin: P; dir: P }
-  | { kind: "revcloud"; points: P[]; arc_len: number }
-  | { kind: "wipeout"; points: P[] }
-  /** Inside the closed entities `boundary_handles` or the ring `points` (less the islands
-   *  `holes`, with each ring's `bulges` as `Boundary` gives them): one of the two. */
-  | {
-      kind: "hatch";
-      boundary_handles: number[];
-      points: P[];
-      holes?: P[][];
-      bulges?: number[][];
-      pattern: HatchPattern;
-    }
-  | { kind: "solid2d"; points: P[] }
-  | { kind: "trace"; points: P[]; width: number }
-  | { kind: "mline"; points: P[]; style: string | null; scale: number | null }
-  | { kind: "sketch"; points: P[] };
+export type DrawSpec = CommandPayload<"draw">;
 
 /** An entity as picked: its handle and the block references it sits inside (empty on the sheet). */
-export type EntityTarget = { handle: number; chain: number[] };
+export type EntityTarget = Required<CommandMap["edit_text"]["target"]>;
 
 /** What a modify changes (`qiyas_core::ModifySpec`): entities at the top of the sheet, in drawing
  *  coordinates; angles in degrees counter-clockwise. */
-export type ModifySpec =
-  | { kind: "move"; targets: EntityTarget[]; delta: P }
-  /** `count` copies, each `delta` further than the one before. */
-  | { kind: "copy"; targets: EntityTarget[]; delta: P; count: number }
-  | { kind: "rotate"; targets: EntityTarget[]; base: P; angle: number; copy: boolean }
-  | { kind: "scale"; targets: EntityTarget[]; base: P; factor: number; copy: boolean }
-  /** `keep`: mirror a copy and keep the originals. */
-  | { kind: "mirror"; targets: EntityTarget[]; p1: P; p2: P; keep: boolean }
-  /** `window`: [lower left, upper right]; the vertices inside it move. */
-  | { kind: "stretch"; targets: EntityTarget[]; window: [P, P]; delta: P }
-  /** One or two [source, destination] pairs. */
-  | { kind: "align"; targets: EntityTarget[]; pairs: [P, P][] }
-  | { kind: "array_rect"; targets: EntityTarget[]; rows: number; cols: number; dy: number; dx: number }
-  /** `count` items, the originals included, each turned `angle` from the one before. */
-  | { kind: "array_polar"; targets: EntityTarget[]; centre: P; count: number; angle: number }
-  | { kind: "explode"; targets: EntityTarget[] };
+export type ModifySpec = CommandPayload<"modify">;
 
 /** A polyline edit (`qiyas_core::PEditOp`). */
-export type PEditOp =
-  | "close"
-  | "open"
-  | "fit_curve"
-  | "decurve"
-  | "convert_to_polyline"
-  | { width: number }
-  /** A vertex on the polyline nearest the point. */
-  | { add_vertex: P }
-  /** The vertex nearest the point goes. */
-  | { delete_vertex: P };
+export type PEditOp = CommandMap["edit.pedit"]["op"];
 
 /** What an edit changes (`qiyas_core::EditSpec`): entities at the top of the sheet, in drawing
  *  coordinates. `at_*` points are where the entity was clicked: which piece, end or side. */
-export type EditSpec =
-  /** No cutters: everything drawn cuts. */
-  | { kind: "trim"; cutters: EntityTarget[]; target: EntityTarget; at_point: P }
-  /** No boundaries: everything drawn. */
-  | { kind: "extend"; boundaries: EntityTarget[]; target: EntityTarget; at_end: P }
-  | { kind: "break"; target: EntityTarget; p1: P; p2: P }
-  | { kind: "join"; targets: EntityTarget[] }
-  | {
-      kind: "lengthen";
-      target: EntityTarget;
-      at_end: P;
-      by: { delta: number } | { total: number } | { percent: number };
-    }
-  | { kind: "reverse"; targets: EntityTarget[] }
-  | { kind: "offset"; target: EntityTarget; distance: number; side_point: P }
-  | { kind: "fillet"; a: EntityTarget; b: EntityTarget; at_a: P; at_b: P; radius: number }
-  | { kind: "chamfer"; a: EntityTarget; b: EntityTarget; at_a: P; at_b: P; d1: number; d2: number }
-  | { kind: "blend"; a: EntityTarget; b: EntityTarget; at_a: P; at_b: P }
-  | { kind: "pedit"; target: EntityTarget; op: PEditOp }
-  | { kind: "overkill"; targets: EntityTarget[]; tol: number }
-  | { kind: "flatten"; targets: EntityTarget[] };
+export type EditSpec = CommandPayload<"edit">;
 
 /** What new entities are drawn with (`qiyas_core::Current`). */
 export type Current = {
@@ -911,265 +769,13 @@ export type Current = {
   lineweight: number;
 };
 
-/** The command bus (`qiyas_core::Command`). Points are in drawing coordinates. */
+/** A recognition result shown in the review panel. */
 export type RecognitionCandidate = {
   handle: number; rule: string; confidence: number; state: "pending" | "accepted" | "rejected";
   placement: { type: string; props: Record<string, string | number | boolean> };
   evidence: { handle?: number; path?: string; page?: number; detail: string; kind?: SourceKind; confidence?: number; bbox?: [[number, number], [number, number]] }[];
   issues: string[]; unresolved: string[]; object: number | null;
 };
-export type Command =
-  | { type: "recognition"; kind: "queue"; state?: "pending" | "accepted" | "rejected" }
-  | { type: "recognition"; kind: "review"; handle: number; decision: "accepted" | "rejected";
-      props?: Record<string, string | number | boolean>; object_type?: string; save_as?: string }
-
-  | { type: "measure_distance"; points: [number, number][] }
-  | { type: "measure_area"; points: [number, number][] }
-  /** `chain`: the block references the entity sits inside, outermost first; empty on the sheet. */
-  | { type: "measure_entity"; handle: number; chain: number[] }
-  | { type: "count_block"; block_name: string; layer: string | null }
-  | { type: "remove_measurement"; id: string }
-  | { type: "set_description"; id: string; text: string }
-  | { type: "set_layer_hidden"; name: string; hidden: boolean }
-  /** Shows only the layer (LAYISO); the layer isolated already un-isolates. Not an undo step. */
-  | { type: "isolate_layer"; name: string }
-  /** Puts back what isolating hid (LAYUNISO). Not an undo step. */
-  | { type: "unisolate_layers" }
-  | { type: "set_sheet"; block: string }
-  /** The drawing holds its Arabic text backwards; not an undo step. */
-  | { type: "set_arabic_reversed"; on: boolean }
-  /** The drafting settings; not an undo step. */
-  | { type: "set_drafting"; drafting: Drafting }
-  /** Length, area and count values come from the geometry (points or handles, not both). */
-  | {
-      type: "add_measurement";
-      kind: Kind;
-      value: number | null;
-      unit: string | null;
-      height: number | null;
-      points: [number, number][];
-      handles: number[];
-      description: string;
-      note: string;
-    }
-  | { type: "set_height"; id: string; height: number }
-  | { type: "link_boq"; id: string; code: string | null }
-  | { type: "set_note"; id: string; text: string }
-  /** Replaces the BOQ; `importBoq` reads one from Excel and runs this. */
-  | { type: "set_boq"; boq: Boq }
-  /** Allowed difference in percent (0 or more) for the BOQ items with `code`; null: the user's setting. */
-  | { type: "set_boq_tolerance"; code: string; percent: number | null }
-  /** Replaces the conflicts and schedules; `compare` runs this. */
-  | { type: "set_conflicts"; conflicts: Conflict[]; schedules: Schedule[] }
-  | { type: "resolve_conflict"; id: string; status: ConflictStatus; note: string }
-  /** `attachPdf` runs these two; `scale` is drawing units per PDF point. */
-  | { type: "import_pdf"; path: string; page: number; insert_at: [number, number]; scale: number }
-  | {
-      type: "attach_pdf_underlay";
-      path: string;
-      page: number;
-      insert_at: [number, number];
-      scale: number;
-    }
-  /** `calibrate` runs this. */
-  | {
-      type: "calibrate";
-      handle: number;
-      p1: [number, number];
-      p2: [number, number];
-      real_distance: number;
-    }
-  /** `attachImage` runs this; `width_units` is the image's width in drawing units. */
-  | { type: "attach_image"; path: string; insert_at: [number, number]; width_units: number }
-  /** 0 to 100 each; one undo step. */
-  | {
-      type: "set_image_display";
-      handle: number;
-      brightness: number;
-      contrast: number;
-      fade: number;
-    }
-  /** The entity's geometry as an `info` outcome; `at` picks a polyline's nearest segment. */
-  | { type: "measure_geometry"; handle: number; chain: number[]; at: [number, number] | null }
-  /** Points on layer QIYAS-POINT dividing the path into `count` parts (2 to 1000), counted. */
-  | { type: "divide_along"; handle: number; chain: number[]; count: number }
-  /** A point every `step` drawing units along the path from its start, counted. */
-  | { type: "measure_along"; handle: number; chain: number[]; step: number }
-  /** Where `p` is, in metres, and the snap that found it, as an `info` outcome. */
-  | { type: "id_point"; p: [number, number]; kind: SnapKind | null }
-  /** A `table` outcome: one row of `fields` per entity `filter` finds (up to 5,000). */
-  | { type: "extract_data"; filter: EntityFilter; fields: Field[] }
-  /** Saves the named view `name` (replacing one of that name) showing `bounds`; Model sheet only. */
-  | { type: "save_view"; name: string; bounds: [[number, number], [number, number]] }
-  /** Removes the named view `name`; `nothing` when there is none. */
-  | { type: "delete_view"; name: string }
-  /** Adds what the spec describes on the current layer: one undo step, an `added` outcome. */
-  | ({ type: "draw" } & DrawSpec)
-  /** What new entities are drawn with; not an undo step. */
-  | { type: "set_current"; current: Current }
-  /** Deletes entities at the top of the sheet: one undo step. */
-  | { type: "delete_entities"; targets: EntityTarget[] }
-  /** Moves, copies, turns… entities at the top of the sheet: one undo step (`changed`, or `added`
-   *  with the new handles). */
-  | ({ type: "modify" } & ModifySpec)
-  /** Trims, extends, breaks, joins… entities at the top of the sheet: one undo step (`edited`, or
-   *  `added` for offset and blend). */
-  | ({ type: "edit" } & EditSpec)
-  /** One line of text on the current layer; `rotation` in degrees; `style` null: the drawing's
-   *  current one. One undo step, an `added` outcome. */
-  | { type: "text"; at: P; height: number; rotation: number; value: string; style: string | null }
-  /** Plain text (lines split by "\n") in a box `width` wide (0: no wrapping), top left at `at`. */
-  | { type: "mtext"; at: P; width: number; height: number; value: string; style: string | null }
-  /** A text's or an MText's new value (plain text), or a block reference's attribute `tag`'s. */
-  | { type: "edit_text"; target: EntityTarget; value: string; tag: string | null }
-  /** One undo step (none when nothing matches): a `replaced` outcome. */
-  | {
-      type: "find_replace";
-      find: string;
-      replace: string;
-      scope: TextScope;
-      match_case: boolean;
-      whole_word: boolean;
-    }
-  /** The matches, without changing anything: a `found` outcome. */
-  | { type: "find_text"; find: string; scope: TextScope; match_case: boolean; whole_word: boolean }
-  /** Dimensions on the current layer in the current style, each with its block: an `added`
-   *  outcome, one undo step. */
-  | ({ type: "dimension" } & DimSpec)
-  | { type: "dim_edit"; target: EntityTarget; op: DimEditOp }
-  /** A gap in the dimension's lines where `cutter` crosses them. */
-  | { type: "dim_break"; target: EntityTarget; cutter: EntityTarget }
-  /** Parallel linear dimensions `spacing` apart going out from `base` (null: twice the text). */
-  | { type: "dim_space"; base: EntityTarget; targets: EntityTarget[]; spacing: number | null }
-  /** A jog in a linear dimension's line nearest `at`. */
-  | { type: "dim_jog_line"; target: EntityTarget; at: P }
-  /** A leader through `points` (arrow at the first) with `text` beside the last: `added` with
-   *  the leader, then the text. MLEADER adds a short landing. */
-  | { type: "leader"; points: P[]; text: string }
-  | { type: "mleader"; points: P[]; text: string }
-  /** A revision cloud around the polygon `points` with the comment `text` beside it, on the
-   *  layer COMMENTS: `added` with the cloud, then its label. `arc_len` null: from the outline. */
-  | { type: "comment"; points: P[]; text: string; arc_len?: number | null }
-  /** The comment clouds of every sheet: `comments`. */
-  | { type: "list_comments" }
-  /** A feature control frame (`{\Fgdt;p}` a symbol, `%%v` between fields) at `at`. */
-  | { type: "tolerance"; at: P; frame: string }
-  /** CANNOSCALE, "paper:drawing" such as "1:50". */
-  | { type: "annotation_scale"; name: string }
-  /** The style `name` (from the current one when new) takes `fields`; `current` makes it the one
-   *  new dimensions take. */
-  | { type: "set_dim_style"; name: string; fields: DimStyleFields; current: boolean }
-  /** A table on the current layer, top left at `at`, cells filled from `data` (plain text): an
-   *  `added` outcome, one undo step. The others change a table, one undo step each. */
-  | {
-      type: "table";
-      at: P;
-      rows: number;
-      cols: number;
-      col_width: number;
-      row_height: number;
-      data: string[][];
-    }
-  | { type: "edit_cell"; target: EntityTarget; row: number; col: number; text: string }
-  | { type: "insert_row"; target: EntityTarget; at: number }
-  | { type: "insert_col"; target: EntityTarget; at: number }
-  | { type: "delete_row"; target: EntityTarget; row: number }
-  | { type: "delete_col"; target: EntityTarget; col: number }
-  /** One cell (`first` = `last`) unmerges the merged cell it is in. */
-  | { type: "merge_cells"; target: EntityTarget; first: [number, number]; last: [number, number] }
-  /** A one-line text holding the field: an `added` outcome. */
-  | { type: "field"; at: P; height: number; field: FieldKind }
-  /** Works every field out again: one undo step when one changes. */
-  | { type: "update_fields" }
-  /** A new block from `targets` (they leave the sheet, relative to `base`); with
-   *  `convert_to_insert` a reference takes their place. An `edited` outcome. */
-  | { type: "create_block"; name: string; base: P; targets: EntityTarget[]; convert_to_insert: boolean }
-  /** A reference to `name` on the current layer, `rotation` in degrees; attributes by tag. With
-   *  `from_path`, a block the drawing lacks is copied from that drawing first. */
-  | {
-      type: "insert_block";
-      name: string;
-      at: P;
-      scale: number;
-      rotation: number;
-      attribute_values: Record<string, string>;
-      from_path?: string | null;
-    }
-  /** Writes the block to a .dwg in the drawing's folder (the Save dialog uses `writeBlock`). */
-  | { type: "write_block"; name: string; path: string }
-  /** Edits the reference's block in place until saved or discarded: not an undo step. */
-  | { type: "edit_block_in_place"; target: EntityTarget }
-  /** End the edit in place, the block taking what was edited or not: a `block_edit_closed`
-   *  outcome, no undo step (the edit's steps leave the history). */
-  | { type: "save_block_edits" }
-  | { type: "discard_block_edits" }
-  | { type: "att_def"; tag: string; prompt: string; default: string; at: P; height: number }
-  | { type: "edit_attributes"; target: EntityTarget; values: Record<string, string> }
-  | { type: "edit_att_def"; block: string; tag: string; prompt: string; default: string }
-  /** Every reference gets the block's attributes as defined now, keeping each tag's value. */
-  | { type: "sync_attributes"; block: string }
-  | { type: "redefine_block"; name: string; from_path: string }
-  /** Layer states, kept in the drawing as AutoCAD keeps them (the hidden layers beside them). */
-  | { type: "save_layer_state"; name: string }
-  | { type: "restore_layer_state"; name: string }
-  | { type: "delete_layer_state"; name: string }
-  | { type: "rename_layer_state"; from: string; to: string }
-  | { type: "set_layer"; name: string; prop: LayerProp; value: boolean | string | number }
-  | { type: "new_layer"; name: string }
-  | { type: "delete_layer"; name: string }
-  | { type: "rename_layer"; from: string; to: string }
-  | { type: "translate_layers"; from_path: string | null; mappings: LayerMapping[] }
-  | { type: "set_viewport_frozen"; viewport: EntityTarget; layer: string; frozen: boolean }
-  /** An empty name: the app asks for one (GROUP). */
-  | { type: "create_group"; name: string; targets: EntityTarget[] }
-  | { type: "add_to_group"; name: string; targets: EntityTarget[] }
-  | { type: "remove_from_group"; name: string; targets: EntityTarget[] }
-  | { type: "delete_group"; name: string }
-  | { type: "ungroup"; targets: EntityTarget[] }
-  | { type: "match_properties"; source: EntityTarget; targets: EntityTarget[]; props: MatchProp[] }
-  | { type: "set_property"; target: EntityTarget; prop: EntityProp; value: boolean | string | number | P }
-  /** The clipboard: the entities as Qiyas's clipboard text (base null: their lower left), and
-   *  a paste of the system clipboard at `at` (as one block reference with `as_block`). */
-  | { type: "copy_to_clipboard"; targets: EntityTarget[]; base: P | null }
-  | { type: "paste_from_clipboard"; at: P; as_block: boolean; height?: number | null }
-  /** Paper layouts and a title block containing only supplied values. */
-  | { type: "new_layout"; name: string; paper: string; orientation?: "portrait" | "landscape" }
-  | { type: "set_layout_paper"; name: string; paper: string; orientation?: "portrait" | "landscape" }
-  | { type: "rename_layout"; from: string; to: string }
-  | { type: "title_block"; fields: Record<string, string>; margin_mm?: number; binding_mm?: number; layer?: string }
-  /** A viewport: ratio string or paper millimetres per model unit, centred at a model point. */
-  | { type: "mview"; corner1?: P; corner2?: P; scale?: string | number | null; centre?: P | null; model_bounds?: [P, P] | null; paper_centre?: P | null; target?: EntityTarget | null }
-  /** The user coordinate system (not an undo step): an origin and an x axis, or an entity's. */
-  | { type: "ucs"; origin: P; x_axis: P }
-  | { type: "ucs_object"; target: EntityTarget }
-  /** PURGE: what nothing uses, of `kinds` (every kind when empty). A dry run only lists it; the
-   *  real run takes it out as one undo step (refused while a block is edited in place). */
-  | { type: "purge"; kinds: PurgeKind[]; dry_run: boolean }
-  /** AUDIT: what points at something the drawing does not have; `fix` repairs what is safe to,
-   *  as one undo step. */
-  | { type: "audit"; fix: boolean }
-  /** A geometric constraint on the parts of `targets` picked at `points` (one each); the first
-   *  entity picked stays where it is when it can. */
-  | { type: "add_constraint"; kind: ConstraintKind; targets: EntityTarget[]; points: P[] }
-  | { type: "delete_constraint"; id: number }
-  /** DELCONSTRAINT: every constraint holding one of `targets`. */
-  | { type: "delete_constraints_on"; targets: EntityTarget[] }
-  /** AUTOCONSTRAIN: what is already true of `targets`, within the settings' tolerances. */
-  | { type: "auto_constrain"; targets: EntityTarget[]; settings?: AutoSettings }
-  /** A dimensional constraint (linear, aligned, angular, radius, diameter), its Dimension
-   *  through `line_point`, its value `expression` (the measured value when null). */
-  | {
-      type: "add_dim_constraint";
-      kind: ConstraintKind;
-      targets: EntityTarget[];
-      points: P[];
-      line_point: P;
-      expression?: string | null;
-    }
-  /** A parameter takes a number or a formula of others (`2*d2 + 1.5`); circles are refused. */
-  | { type: "set_parameter"; name: string; expression: string }
-  | { type: "list_constraints" }
-  | { type: "list_parameters" };
 
 /** What a constraint keeps (`qiyas_core::ConstraintKind`): the geometric kinds, then the
  *  dimensional ones. */
@@ -1191,7 +797,7 @@ export const DIMENSIONAL_KINDS = ["linear", "aligned", "angular", "radius", "dia
 export type ConstraintKind = (typeof GEOMETRIC_KINDS)[number] | (typeof DIMENSIONAL_KINDS)[number];
 
 /** AUTOCONSTRAIN's kinds and tolerances (drawing units, degrees); the core's defaults when left out. */
-export type AutoSettings = { kinds?: ConstraintKind[]; distance_tolerance?: number; angle_tolerance?: number };
+export type AutoSettings = NonNullable<CommandMap["auto_constrain"]["settings"]>;
 
 /** A constraint on the sheet on screen: the entities it holds, where its first part is, and a
  *  dimensional one's parameter, expression, value (drawing units or degrees) and Dimension. */
@@ -1260,7 +866,7 @@ export type AuditItem = { kind: AuditKind; name: string; count: number; handles:
 export type AuditReport = { fix: boolean; counts: Partial<Record<AuditKind, number>>; repaired: number; items: AuditItem[] };
 
 /** Where find and replace looks: the sheet on screen, or every sheet. */
-export type TextScope = "sheet" | "drawing";
+export type TextScope = NonNullable<CommandMap["find_text"]["scope"]>;
 
 /** An entity holding a match (a block reference, for an attribute) and its sheet (block name). */
 export type TextMatch = { handle: number; sheet: string };
@@ -1319,8 +925,7 @@ export type Outcome =
 export const runCommand = (cmd: Command) => invoke<Outcome>("run_command", { cmd });
 
 /** Registry words and aliases, in command order; each command's first word is its full name. */
-export type CommandWord = { word: string; command: string; summary: string };
-export const commandWords = () => invoke<CommandWord[]>("command_words");
+export const commandWords = (): Promise<CommandWord[]> => Promise.resolve(COMMAND_WORDS.map((word) => ({ ...word })));
 export type CmdlineStep =
   | { type: "command"; command: Command; last: P | null }
   | { type: "prompt"; prompt: string; last: P | null }

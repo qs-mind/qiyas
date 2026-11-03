@@ -50,6 +50,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Refresh the window's generated command types from the core registry.
+    GenTs {
+        #[arg(long, default_value = "src/generated/commands.ts")]
+        output: PathBuf,
+    },
     /// Export quantities from a drawing or a saved project using a data-defined layout.
     Export {
         source: PathBuf,
@@ -268,6 +273,14 @@ impl Out {
 
 fn dispatch(cmd: &Cmd, out: &Out) -> Done {
     match cmd {
+        Cmd::GenTs { output } => {
+            let text = qiyas_core::command_types::typescript()?;
+            if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(output, text).map_err(|e| e.to_string())?;
+            Ok(None)
+        }
         Cmd::Mcp(args) => headless::run(args),
         Cmd::DesignRun(args) => {
             let report = eval::design::run(args)?;
