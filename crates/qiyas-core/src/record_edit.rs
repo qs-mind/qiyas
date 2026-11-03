@@ -354,6 +354,22 @@ impl Session {
                 }
             }
             let (kind, data, schema, baseline) = staged.get_mut(&cache_key).expect("loaded above");
+            // A text's value is set as edit_text sets it (see `text_value_update`).
+            if matches!(kind.as_str(), "Text" | "MText")
+                && self
+                    .text_value_update(
+                        collection,
+                        &RecordUpdate {
+                            key: key.clone(),
+                            path: path.to_owned(),
+                            value: value.clone(),
+                            expected: None,
+                        },
+                    )
+                    .is_some()
+            {
+                continue;
+            }
             let rule = match collection {
                 Collection::Entities | Collection::Viewports => entity_rule(kind, path),
                 Collection::Layers => layer_rule(path),
@@ -482,6 +498,48 @@ impl Session {
     }
 
     /// `Command::SetRecords`.
+    /// The handle of an entities update that sets a Text's or MText's `/value` to a string:
+    /// run as `edit_text` (reading order and its mark), not refused.
+    pub(crate) fn text_value_update(
+        &self,
+        collection: Collection,
+        u: &RecordUpdate,
+    ) -> Option<u64> {
+        if collection != Collection::Entities || u.path != "/value" || !u.value.is_string() {
+            return None;
+        }
+        let h = crate::registry::handle_number(&u.key)?;
+        let entity = self.drawing.doc.get_entity(Handle::new(h))?;
+        // A field's text is worked out from its code: it stays refused.
+        (matches!(entity, EntityType::Text(_) | EntityType::MText(_))
+            && entity
+                .common()
+                .extended_data
+                .get_record(crate::field::FIELD_APP)
+                .is_none())
+        .then_some(h)
+    }
+
+    /// `expected` for a text update set through `edit_text`: the text as its record reads.
+    pub(crate) fn check_text_expected(&self, h: u64, u: &RecordUpdate) -> Result<(), CoreError> {
+        let Some(expected) = u.expected.as_ref().filter(|e| !e.is_null()) else {
+            return Ok(());
+        };
+        let entity = self
+            .drawing
+            .doc
+            .get_entity(Handle::new(h))
+            .ok_or(CoreError::NoSuchEntity(h))?;
+        let now = entity_data(entity)["value"].clone();
+        if &now != expected {
+            return Err(invalid(format!(
+                "{} {h} /value changed since it was read: it is now {now}",
+                variant_name(entity)
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_records(
         &mut self,
         collection: Collection,

@@ -324,6 +324,11 @@ only model viewport (or makes one; several must be named); an edit whose targets
 other sheet runs there (reported `/sheet` default). Broken tool JSON is answered with the text
 where it broke; a miscopied artifact id that is part of exactly one saved id finds it. A design
 run that uses its request allowance reports `stopped: request limit reached`, not a failure.
+Office run 5: a generate range without `step` counts by 1 towards `to`; `set_records` of a
+Text/MText `/value` string runs as `edit_text` in the same undo step (`expected` still checks);
+`dim_edit` accepts `text_position` (and `op:{text_position}`) for `move_text`; a decision's lone
+entry may sit beside `kind` without `entries`, and a nonnumeric value without `unit` has the
+empty unit (reported); `make_sheet` of an existing name names its viewports and the `mview` to change it.
 
 ## Session references
 
@@ -3991,8 +3996,8 @@ of shipped values; `tests/walls.rs` covers custom block symbols and legacy openi
 - Parser fuzzing lives in `fuzz/`, its own Cargo workspace excluded from the app workspace.
   `.github/workflows/fuzz.yml` runs nightly and manually on nightly Rust: nine targets,
   three minutes each, sequentially, with crash artifacts and logs uploaded even on failure.
-  Local commands and seed provenance are in `fuzz/README.md`: niced, `-j 1`, with
-  `CARGO_BUILD_JOBS=1`. The raw command target validates arbitrary JSON against a blank
+  Local commands and seed provenance are in `fuzz/README.md`: one worker per core
+  (`-j "$(nproc)"`), building with every core. The raw command target validates arbitrary JSON against a blank
   drawing and executes only a small set of in-memory commands; file commands stop at validation.
   Development-only dependencies are `arbitrary` (MIT OR Apache-2.0) and `libfuzzer-sys`
   (MIT OR Apache-2.0 wrapper, bundled NCSA libFuzzer); their versions and tool licences

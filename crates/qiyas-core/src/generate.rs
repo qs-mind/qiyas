@@ -71,6 +71,7 @@ pub struct Loop {
     pub from: Option<Scalar>,
     #[serde(default)]
     pub to: Option<Scalar>,
+    /// Range step; omitted, 1 (or -1 when `to` is below `from`).
     #[serde(default)]
     pub step: Option<Scalar>,
     #[serde(default)]
@@ -545,11 +546,12 @@ fn loop_values(session: &Session, item: &Loop, scope: &Scope<'_>) -> Result<Stat
             .as_ref()
             .ok_or_else(|| invalid("A range needs to"))?,
     )?;
-    let step = scalar(
-        item.step
-            .as_ref()
-            .ok_or_else(|| invalid("A range needs step"))?,
-    )?;
+    // Omitted, the step is one, counting towards `to`.
+    let step = match &item.step {
+        Some(step) => scalar(step)?,
+        None if to < from => -1.0,
+        None => 1.0,
+    };
     if step == 0.0 || (to - from) * step < 0.0 {
         return Err(invalid(
             "Range step must be nonzero and move from from towards to",

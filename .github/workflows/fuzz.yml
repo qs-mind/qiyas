@@ -36,14 +36,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang pkg-config libfontconfig1-dev
       - name: Install cargo-fuzz
-        run: nice cargo install cargo-fuzz --version 0.13.1 --locked -j 1
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
       - name: Record toolchain
         run: |
           mkdir -p fuzz/artifacts
           rustc +nightly -Vv > fuzz/artifacts/toolchain.txt
           cargo fuzz --version >> fuzz/artifacts/toolchain.txt
       - name: Build harnesses
-        run: nice cargo +nightly fuzz build
+        run: cargo +nightly fuzz build
       - name: Run each target for three minutes
         run: |
           status=0
@@ -54,7 +54,7 @@ jobs:
               *) max_len=16384 ;;
             esac
             mkdir -p "fuzz/artifacts/$target"
-            if nice cargo +nightly fuzz run "$target" -j 1 -- \
+            if cargo +nightly fuzz run "$target" -j "$(nproc)" -- \
               -max_total_time=180 -timeout=15 -rss_limit_mb=2048 \
               -malloc_limit_mb=512 -max_len="$max_len" \
               2>&1 | tee "fuzz/artifacts/$target/run.log"; then
@@ -63,6 +63,8 @@ jobs:
               echo "$target: failed (see crash artifacts and run.log)" >> "$GITHUB_STEP_SUMMARY"
               status=1
             fi
+            # Each worker writes its own fuzz-<n>.log.
+            mv fuzz-*.log "fuzz/artifacts/$target/" 2>/dev/null || true
           done
           exit "$status"
       - name: Upload crashes, logs and resolved dependencies

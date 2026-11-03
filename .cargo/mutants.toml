@@ -1,6 +1,5 @@
 examine_globs = ["crates/qiyas-param/src/expr.rs"]
 test_package = ["qiyas-param"]
-additional_cargo_args = ["--jobs", "1"]
 copy_target = false
 copy_vcs = false
 timeout_multiplier = 3.0

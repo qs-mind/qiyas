@@ -11,19 +11,19 @@ Install the tools once (a C++ compiler is needed for libFuzzer):
 
 ```sh
 rustup toolchain install nightly --profile minimal
-nice cargo install cargo-fuzz --version 0.13.1 --locked -j 1
+cargo install cargo-fuzz --version 0.13.1 --locked
 ```
 
-Run one worker with one Cargo build job. AddressSanitizer, debug assertions and
-overflow checks use cargo-fuzz's defaults:
+Run one worker per core, building with every core. AddressSanitizer, debug
+assertions and overflow checks use cargo-fuzz's defaults:
 
 ```sh
-CARGO_BUILD_JOBS=1 nice cargo +nightly fuzz run expression -j 1 -- \
+cargo +nightly fuzz run expression -j "$(nproc)" -- \
   -max_total_time=180 -timeout=15 -rss_limit_mb=2048 \
   -malloc_limit_mb=512 -max_len=16384
 ```
 
-`-j 1` controls fuzz workers; `CARGO_BUILD_JOBS=1` also limits compilation. The
+`-j` sets the fuzz workers (each writes `fuzz-<n>.log`). The
 input bounds are checked inside every harness, including artifact replay. The
 RSS, allocation and timeout flags limit parser expansion and hangs; input size
 alone cannot bound a compressed workbook's expanded contents.
@@ -76,10 +76,10 @@ coverage and crash artifacts are ignored. No customer drawings or large binaries
 belong here. The separate lockfile is generated locally; CI uploads its resolved
 copy with the toolchain version and crash logs for reproduction.
 
-Reproduce a saved crash with the same resource limits:
+Reproduce a saved crash with the same input limits:
 
 ```sh
-CARGO_BUILD_JOBS=1 nice cargo +nightly fuzz run expression -j 1 \
+cargo +nightly fuzz run expression \
   fuzz/artifacts/expression/crash-<hash> -- \
   -runs=1 -timeout=15 -rss_limit_mb=2048 -malloc_limit_mb=512
 ```
@@ -97,17 +97,16 @@ version and resolved dependencies for 14 days.
 
 The configuration in `.cargo/mutants.toml` mutates only
 `crates/qiyas-param/src/expr.rs` and tests only `qiyas-param`, including its unit and
-integration tests. It sets one Cargo build job and keeps the normal baseline run.
+integration tests. It keeps the normal baseline run.
 Use cargo-mutants' temporary copy of the source tree; never pass `--in-place`.
-Run overnight, with no other Rust job on this laptop:
+Run it with every core:
 
 ```sh
-nice cargo install cargo-mutants --locked -j 1
-CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 nice cargo mutants -p qiyas-param -j 1
+cargo install cargo-mutants --locked
+cargo mutants -p qiyas-param -j "$(nproc)"
 ```
 
-`-j 1` limits simultaneous mutation experiments as well as the config's Cargo job
-limit. Results go to the ignored `mutants.out/`. Inspect surviving mutants for
+`-j` runs that many mutation experiments at once. Results go to the ignored `mutants.out/`. Inspect surviving mutants for
 missing assertions or equivalent changes; timeouts are inconclusive. This setup
 does not run the campaign. Configuration keys follow the
 [cargo-mutants config reference](https://mutants.rs/config-file.html).

@@ -273,8 +273,13 @@ fn set_records_refuses_what_it_must_and_says_which_command_does_it() {
     };
     let e = refused(&mut s, json!(line), "/common/handle", json!(1));
     assert!(e.contains("identity"), "{e}");
-    let e = refused(&mut s, json!(text), "/value", json!("X"));
-    assert!(e.contains("edit_text"), "{e}");
+    // A plain text's value is set as edit_text sets it (a field's stays refused).
+    set(
+        &mut s,
+        Collection::Entities,
+        vec![update(json!(text), "/value", json!("X"))],
+    )
+    .unwrap();
     let e = refused(&mut s, json!(line), "/common/layer", json!("BAD/NAME"));
     assert!(e.contains("layer name"), "{e}");
     let e = refused(&mut s, json!(line), "/no/such/path", json!(1));
@@ -306,11 +311,11 @@ fn set_records_refuses_what_it_must_and_says_which_command_does_it() {
         Collection::Entities,
         vec![
             update(json!(line), "/start/x", json!(99.0)),
-            update(json!(text), "/value", json!("X")),
+            update(json!(line), "/common/handle", json!(1)),
         ],
     )
     .unwrap_err();
-    assert!(e.contains("edit_text"));
+    assert!(e.contains("identity"), "{e}");
     let x1 = s
         .records(&RecordQuery {
             handles: vec![line],

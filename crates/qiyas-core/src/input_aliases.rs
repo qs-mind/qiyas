@@ -50,6 +50,73 @@ pub(crate) fn records(query: &mut Value) {
     }
 }
 
+/// Other words for a dimension edit's operations, at the top or inside `op`
+/// (the office run sent `op: {text_position: [x, y]}`).
+fn dim_edit_words(value: &mut Value) {
+    const WORDS: [(&str, &str); 6] = [
+        ("text_position", "move_text"),
+        ("text_point", "move_text"),
+        ("text_at", "move_text"),
+        ("dimension_line_point", "line_point"),
+        ("line_position", "line_point"),
+        ("override", "text_override"),
+    ];
+    for (from, to) in WORDS {
+        alias(value, from, to);
+        if value["op"].is_object() {
+            alias(&mut value["op"], from, to);
+        }
+    }
+}
+
+/// A decision written as one entry with its fields beside `kind` (no `entries`): those
+/// fields are the entry. A nonnumeric value with no unit has the empty unit.
+fn decision_entry_fields(value: &mut Value) {
+    wrap_decision_entry(value);
+    let mut unit = |entry: &mut Value| {
+        if entry.is_object()
+            && entry.get("unit").is_none()
+            && entry
+                .get("value")
+                .is_some_and(|v| !v.is_number() && !v.is_null())
+        {
+            entry["unit"] = json!("");
+        }
+    };
+    match value.get_mut("entries") {
+        Some(Value::Array(entries)) => entries.iter_mut().for_each(&mut unit),
+        Some(entry) => unit(entry),
+        None => {}
+    }
+}
+
+/// Moves a lone entry's fields into `entries`: a rename, never reported as defaults.
+fn wrap_decision_entry(value: &mut Value) {
+    const ENTRY: [&str; 10] = [
+        "name",
+        "value",
+        "unit",
+        "reason",
+        "source",
+        "citation",
+        "set_by",
+        "status",
+        "question",
+        "takeoff_exclusion",
+    ];
+    if value.get("entries").is_none() && value.get("name").is_some() {
+        if let Some(map) = value.as_object_mut() {
+            let mut entry = serde_json::Map::new();
+            for field in ENTRY {
+                if let Some(v) = map.remove(field) {
+                    entry.insert(field.into(), v);
+                }
+            }
+            map.insert("entries".into(), Value::Array(vec![Value::Object(entry)]));
+        }
+    }
+}
+
 /// Paper corners together with a model window: the corners are the frame, the window's
 /// middle its centre and, with no scale given, the largest scale that shows the whole window.
 fn mview_mixed(value: &mut Value) {
@@ -92,6 +159,12 @@ pub(crate) fn normalize(value: &mut Value) {
     let name = value["type"].as_str().unwrap_or_default().to_owned();
     if name == "decision" || name.starts_with("decision.") {
         alias(value, "action", "kind");
+    }
+    if name == "dim_edit" {
+        dim_edit_words(value);
+    }
+    if (name == "decision" && value["kind"] == "set") || name == "decision.set" {
+        decision_entry_fields(value);
     }
     match name.as_str() {
         "set_layer"
@@ -283,6 +356,15 @@ pub(crate) fn normalize(value: &mut Value) {
 
 /// Only inferred values, not renamed fields, are defaults.
 pub(crate) fn defaults(raw: &Value, canonical: &Value, prefix: &str) -> Vec<DefaultUsed> {
+    let mut wrapped;
+    let set = raw["kind"] == "set" || raw["action"] == "set";
+    let raw = if (raw["type"] == "decision" && set) || raw["type"] == "set" {
+        wrapped = raw.clone();
+        wrap_decision_entry(&mut wrapped);
+        &wrapped
+    } else {
+        raw
+    };
     fn visit(a: &Value, b: &Value, path: &str, out: &mut Vec<DefaultUsed>) {
         if a["type"] == "mview"
             && a.get("model_bounds").is_some()
@@ -325,6 +407,7 @@ pub(crate) fn defaults(raw: &Value, canonical: &Value, prefix: &str) -> Vec<Defa
                             | "op"
                             | "reason"
                             | "set_by"
+                            | "unit"
                     )
                     || (key == "rows" && a[key].is_array() && value.is_number())
                 {

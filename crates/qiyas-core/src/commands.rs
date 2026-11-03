@@ -3549,7 +3549,35 @@ impl Session {
             Command::SetRecords {
                 collection,
                 updates,
-            } => return self.set_records(collection, updates),
+            } => {
+                // A text's `/value` goes through edit_text, in this same undo step.
+                let (texts, rest): (Vec<_>, Vec<_>) = updates
+                    .into_iter()
+                    .partition(|u| self.text_value_update(collection, u).is_some());
+                for u in &texts {
+                    let h = self.text_value_update(collection, u).expect("partitioned");
+                    self.check_text_expected(h, u)?;
+                }
+                let outcome = if rest.is_empty() {
+                    Outcome::Changed
+                } else {
+                    self.set_records(collection, rest)?
+                };
+                for u in texts {
+                    let h = self.text_value_update(collection, &u).expect("partitioned");
+                    let target = Target {
+                        handle: h,
+                        chain: Vec::new(),
+                    };
+                    let value = u.value.as_str().unwrap_or_default().to_owned();
+                    if self.list_comments().iter().any(|c| c.label == Some(h)) {
+                        self.check_quantity_note(&value, source)?;
+                    }
+                    self.edit_text(&target, &value, None)?;
+                    self.record_text_origin(h, source)?;
+                }
+                return Ok(outcome);
+            }
             Command::CreateEntities { entities, sheet } => {
                 return Ok(Outcome::Added {
                     handles: self.create_entities(entities, sheet)?,

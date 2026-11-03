@@ -572,14 +572,31 @@ impl Session {
             })
             .collect();
         for name in &names {
-            if self
+            if let Some(sheet) = self
                 .drawing
                 .sheets()
-                .iter()
-                .any(|s| s.name.eq_ignore_ascii_case(name))
+                .into_iter()
+                .find(|s| s.name.eq_ignore_ascii_case(name))
             {
+                // Say how to change the sheet that is there, so it is not made twice.
+                let views: Vec<String> = self
+                    .paper_views_of(&sheet.block)
+                    .iter()
+                    .map(|v| v.handle.to_string())
+                    .collect();
+                let change = if views.is_empty() {
+                    "add its view with mview and \"sheet\"".to_string()
+                } else {
+                    format!(
+                        "change its view with mview {{\"sheet\":{:?}, \"target\":{{\"handle\":{}}}, \"model_bounds\":…, \"scale\":…}}",
+                        sheet.name, views[0]
+                    )
+                };
                 return Err(invalid(format!(
-                    "The drawing already has a sheet named {name} / توجد لوحة بهذا الاسم: {name}"
+                    "The drawing already has a sheet named {}: {change} (viewports: {}), or give another name / توجد لوحة بهذا الاسم: {}؛ عدّل نافذة العرض بالأمر mview أو اختر اسما آخر",
+                    sheet.name,
+                    if views.is_empty() { "none".to_string() } else { views.join(", ") },
+                    sheet.name
                 )));
             }
         }
