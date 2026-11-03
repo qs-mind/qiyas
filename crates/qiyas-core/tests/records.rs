@@ -275,8 +275,8 @@ fn set_records_refuses_what_it_must_and_says_which_command_does_it() {
     assert!(e.contains("identity"), "{e}");
     let e = refused(&mut s, json!(text), "/value", json!("X"));
     assert!(e.contains("edit_text"), "{e}");
-    let e = refused(&mut s, json!(line), "/common/layer", json!("NO-SUCH"));
-    assert!(e.contains("no layer NO-SUCH"), "{e}");
+    let e = refused(&mut s, json!(line), "/common/layer", json!("BAD/NAME"));
+    assert!(e.contains("layer name"), "{e}");
     let e = refused(&mut s, json!(line), "/no/such/path", json!(1));
     assert!(e.contains("record_schema"), "{e}");
     let e = refused(&mut s, json!(line), "/start/x", json!("not a number"));

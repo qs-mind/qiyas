@@ -150,7 +150,11 @@ impl Session {
         let previous = self.sheet.clone();
         self.set_sheet(&block)?;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_input_here(&input, source)
+            let mut targeted_raw = raw.clone();
+            if let Some(map) = targeted_raw.as_object_mut() {
+                map.remove("expected_revision");
+            }
+            self.run_input_here(&targeted_raw, source)
         }));
         if self.set_sheet(&previous).is_err() {
             let _ = self.set_sheet("*Model_Space");
@@ -181,6 +185,9 @@ impl Session {
         self.resolve_input_handles(&mut input)?;
         let mut report = self.validate_input(&input);
         report
+            .defaults_used
+            .extend(crate::input_aliases::defaults(raw, &input, ""));
+        report
             .warnings
             .extend(crate::registry::normalization_warnings(raw));
         let parsed = serde_path_to_error::deserialize::<_, Command>(input.clone());
@@ -208,7 +215,7 @@ impl Session {
                         "A batch can't run inside another batch".into(),
                     ))
                 } else {
-                    self.run_input_batch(&input["commands"], layer, color, source, report)
+                    self.run_input_batch(&raw["commands"], layer, color, source, report)
                 }
             }
             command => self.run_command(command, source).map(|outcome| Reported {

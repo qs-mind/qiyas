@@ -103,15 +103,20 @@ pub(crate) fn args(
             }
         }
     }
-    if tool == READ && op == "records" && v["where"].is_object() {
-        v["where"] = json!([v["where"]]);
-        warnings.push(warning(
-            "/args/where",
-            "Normalised one where condition to an array.",
-        ));
+    if tool == READ && op == "records" {
+        let mut command = json!({"type":"records", "query":v});
+        qiyas_core::registry::canonicalize(&mut command);
+        if command["query"] != v {
+            warnings.push(warning(
+                "/args/where",
+                "Normalised records filters to path/value; block means block_name.",
+            ));
+        }
+        v = command["query"].clone();
     }
     if tool == READ
-        && ((op == "query" && v["kind"] == "entity") || op == "measure")
+        && ((op == "query" && v["kind"] == "entity")
+            || (op == "measure" && v["handles"].as_array().is_some_and(|a| a.len() == 1)))
         && v.get("handles").is_some()
     {
         if v.get("handle").is_some() {

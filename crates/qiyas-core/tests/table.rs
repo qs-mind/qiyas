@@ -73,6 +73,8 @@ fn new_table(s: &mut Session, at: [f64; 2], data: &[&[&str]]) -> u64 {
     let cols = data[0].len();
     one(s
         .run(Command::Table {
+            col_widths: Vec::new(),
+            text_height: None,
             at,
             rows,
             cols,
@@ -185,6 +187,8 @@ fn a_new_3_by_2_table_reads_back_as_a_schedule() {
 fn a_table_needs_cells_and_sizes() {
     let (_dir, mut s) = open(&sample_doc(), "plan.dxf");
     let bad = |rows, cols, w: f64, h: f64, data: Vec<Vec<String>>| Command::Table {
+        col_widths: Vec::new(),
+        text_height: None,
         at: [0.0, 0.0],
         rows,
         cols,
@@ -826,6 +830,8 @@ fn a_row_grows_to_hold_its_wrapped_text() {
     let mut s = Session::new_blank(&dir.path().join("t.dwg"), 6);
     let Outcome::Added { handles } = s
         .run(Command::Table {
+            col_widths: Vec::new(),
+            text_height: None,
             at: [0.0, 0.0],
             rows: 2,
             cols: 2,

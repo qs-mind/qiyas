@@ -582,6 +582,7 @@ impl Session {
             layer.handle = doc.allocate_handle();
             layer.color = color;
             doc.layers.add(layer).expect("checked it is missing");
+            self.last_advice.push(serde_json::json!({"code":"layer_created", "name":name, "message":format!("Created missing layer {name}."), "message_ar":format!("أُنشئت الطبقة المفقودة {name}.")}));
         }
     }
 

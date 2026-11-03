@@ -1777,6 +1777,10 @@ fn query(session: &Session, args: &Value) -> Result<ToolOutput, ToolError> {
         "texts" => {
             let block = surface_io::sheet_block(session, args["sheet"].as_str())?;
             let mut rows = session.read_text(Some(&block), within);
+            if let Some(needle) = args["contains"].as_str() {
+                let needle = needle.to_lowercase();
+                rows.retain(|row| row.text.to_lowercase().contains(&needle));
+            }
             if let Some(layer) = args["layer"].as_str() {
                 rows.retain(|row| row.layer.eq_ignore_ascii_case(layer));
             }
@@ -1928,6 +1932,17 @@ fn query(session: &Session, args: &Value) -> Result<ToolOutput, ToolError> {
 /// `measure`: the length and area of an entity or of points, in metres, without a take-off row.
 fn measure(session: &Session, args: &Value) -> Result<Value, ToolError> {
     let to_m = crate::surface_io::sheet_metres_per_unit(session);
+    if let Some(handles) = args["handles"].as_array() {
+        let mut measurements = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let mut one = json!({"handle":handle});
+            if let Some(chain) = args.get("chain") {
+                one["chain"] = chain.clone();
+            }
+            measurements.push(measure(session, &one)?);
+        }
+        return Ok(json!({"measurements":measurements}));
+    }
     if let Some(handle) = args.get("handle") {
         let h = handle
             .as_u64()
@@ -2019,6 +2034,8 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
             details: json!({"errors": report.errors, "warnings": report.warnings}),
         }
     })?;
+    let mut wire = value.clone();
+    qiyas_core::registry::canonicalize(&mut value);
     let kind = value["type"].as_str().unwrap_or_default().to_string();
     let Some(info) = command_info(&value) else {
         let report = session.validate_input(&value);
@@ -2075,7 +2092,6 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
                     .map_err(|error| bad(format!("Batch step {index}: {error}")))?;
                 // Keep omitted fields omitted so the core can report their defaults.
                 *command = command_value(command)?;
-                qiyas_core::registry::canonicalize(command);
                 resolve_paths(session, command)?;
             }
         }
@@ -2091,7 +2107,21 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
             info.examples.first().cloned().unwrap_or_default()
         ))
     })?;
-    Ok((command, value))
+    // Resolve host paths while preserving omitted fields for the core's default report.
+    wire["type"] = value["type"].clone();
+    if value["type"] == "deliverable" && wire.get("report").is_none() {
+        if let Some(report) = value.get("report") {
+            wire["report"] = report.clone();
+        }
+    }
+    if let Some(kind) = value.get("kind") {
+        wire["kind"] = kind.clone();
+        if wire["type"] == "decision" {
+            wire.as_object_mut().unwrap().remove("action");
+        }
+    }
+    resolve_paths(session, &mut wire)?;
+    Ok((command, wire))
 }
 
 /// Reads a command object before binding its fields. Its type and kind must be literal.
@@ -2225,12 +2255,13 @@ fn input_path(schema: &Value, value: &Value, path: &str) -> Option<String> {
 
 /// File fields belong to the command, not arbitrary record data or JSON pointer paths.
 fn resolve_paths(session: &Session, value: &mut Value) -> Result<(), ToolError> {
-    let kind = value["type"].as_str().unwrap_or_default();
+    let mut canonical = value.clone();
+    qiyas_core::registry::canonicalize(&mut canonical);
+    let kind = canonical["type"].as_str().unwrap_or_default();
     if kind == "batch" {
         if let Some(commands) = value["commands"].as_array_mut() {
             for command in commands {
                 *command = command_value(command)?;
-                qiyas_core::registry::canonicalize(command);
                 resolve_paths(session, command)?;
             }
         }

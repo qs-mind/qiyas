@@ -877,6 +877,12 @@ pub enum Command {
         /// Default or zero: fit the longest cell line plus one row height of padding.
         #[serde(default)]
         col_width: f64,
+        /// Individual column widths, in drawing units; one positive width per column.
+        #[serde(default)]
+        col_widths: Vec<f64>,
+        /// Cell text height; omitted uses half the row height.
+        #[serde(default)]
+        text_height: Option<f64>,
         /// Default or zero: twice the default text height at the sheet's annotation scale.
         #[serde(default)]
         row_height: f64,
@@ -3038,10 +3044,21 @@ impl Session {
                 rows,
                 cols,
                 col_width,
+                col_widths,
+                text_height,
                 row_height,
                 data,
             } => {
-                let h = self.add_table(at, rows, cols, col_width, row_height, &data)?;
+                let h = self.add_table_sized(
+                    at,
+                    rows,
+                    cols,
+                    col_width,
+                    row_height,
+                    &data,
+                    &col_widths,
+                    text_height,
+                )?;
                 self.record_text_origin(h, source)?;
                 return Ok(Outcome::Added { handles: vec![h] });
             }

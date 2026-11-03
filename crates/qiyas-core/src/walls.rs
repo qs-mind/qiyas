@@ -59,6 +59,9 @@ pub enum DoorSwing {
 /// A cut centred `at` along a run, with `width` in drawing units. Vertical sizes are metres.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WallOpening {
+    /// Custom opening ID; empty uses the size mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
     /// A block in this drawing, with local X spanning the opening. Uniformly scaled to its width.
     /// Mizan supplies its own detailed block. Omission retains the manual/legacy recipe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,6 +390,11 @@ impl Session {
                         serde_json::json!(spec.openings[i].kind)
                     };
                     object.props.insert("kind".into(), kind);
+                    if role == "openings" {
+                        if let Some(mark) = &spec.openings[i].mark {
+                            object.props.insert("mark".into(), serde_json::json!(mark));
+                        }
+                    }
                     for property in object.props.keys() {
                         object.sources.entry(property.clone()).or_insert(
                             crate::measurement::PropSource {
@@ -670,6 +678,9 @@ impl Session {
 /// An opening added to a picked centreline. Distances use drawing units; vertical sizes metres.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddedWallOpening {
+    /// Custom opening ID; empty uses the size mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
     /// A block in this drawing, with local X spanning the opening. Uniformly scaled to its width.
     /// Mizan supplies its own detailed block. Omission retains the manual/legacy recipe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1779,6 +1790,7 @@ impl Session {
                 sill: o.sill,
                 head: o.head,
                 symbol: o.symbol.clone(),
+                mark: o.mark.clone(),
             }));
             explicit_runs(spec);
             for opening in &spec.openings {
@@ -1845,6 +1857,7 @@ impl Session {
                 sill: o.sill,
                 head: o.head,
                 symbol: o.symbol.clone(),
+                mark: o.mark.clone(),
             }));
         explicit_runs(&mut spec);
         self.rebuild_walls(spec, &[group], source)
@@ -1938,6 +1951,7 @@ impl Session {
             }
         }
         if let Some(mark) = edit.mark {
+            spec.openings[index].mark = Some(mark.clone());
             self.set_object_props(
                 &[insert],
                 &BTreeMap::from([("mark".into(), serde_json::json!(mark))]),

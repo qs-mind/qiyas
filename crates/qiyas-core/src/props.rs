@@ -152,6 +152,7 @@ impl Session {
     ) -> Result<(), CoreError> {
         let h = self.sheet_targets(std::slice::from_ref(target))?[0];
         if prop == EntityProp::Layer {
+            self.ensure_named_layer(text(value)?)?;
             if let Some(object) = crate::objects::instance(self.entity(h)) {
                 let definition = self.object_type(&object.type_name)?;
                 if let Some(property) = definition

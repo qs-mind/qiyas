@@ -115,6 +115,10 @@ pub(crate) fn entity_rule(kind: &str, path: &str) -> Rule {
             why: "a dimension's block is its own",
             via: Some("dim_edit"),
         },
+        "Viewport" if matches!(path.trim_start_matches('/').split(['/', '.']).next(), Some("width" | "height" | "center" | "centre" | "view_center" | "view_height")) => Rule::Refuse {
+            why: "a viewport frame and view centre are edited together",
+            via: Some("mview {target:{handle:KEY}, corner1:[left,bottom], corner2:[right,top], centre:[model_x,model_y], scale:\"1:100\"}"),
+        },
         "Table" if !under("/common") => Rule::Refuse {
             why: "a table's cells, rows and columns have their own commands",
             via: Some("edit_cell"),
@@ -357,7 +361,11 @@ impl Session {
                 _ => unreachable!("only writable collections"),
             };
             if let Err(why) = refuse(rule, kind, path) {
-                error("refused", "path", why.to_string());
+                error(
+                    "refused",
+                    "path",
+                    why.to_string().replace("KEY", &key.to_string()),
+                );
                 continue;
             }
             let Some(previous) = data.pointer(path).filter(|_| path.starts_with('/')) else {
@@ -541,6 +549,7 @@ impl Session {
             let mut data = entity_data(&old);
             apply(&mut data, &list, &what)?;
             let new = entity_from_record(&kind, data, &old, &what)?;
+            self.ensure_named_layer(&new.common().layer)?;
             self.check_entity_refs(&new, &what)?;
             if new.common().handle != handle
                 || new.common().owner_handle != old.common().owner_handle
@@ -746,7 +755,10 @@ impl Session {
                 refuse(entity_rule(&kind, &path), &what, &path)?;
             }
         }
-        merge(&mut data, &wanted.data);
+        let mut input =
+            json!({"type":"create_entities", "entities":[{"type":wanted.kind,"data":wanted.data}]});
+        crate::input_aliases::normalize(&mut input);
+        merge(&mut data, &input["entities"][0]["data"]);
         let entity: EntityType = read_back(json!({ kind.clone(): data }), &what)?;
         Ok((entity, what))
     }
@@ -1300,7 +1312,17 @@ pub fn record_input_schema(name: &str) -> Result<Value, CoreError> {
     let format = registry
         .get(container)
         .ok_or_else(|| invalid(format!("No record type {name}")))?;
-    let schema = input_container(&registry, format, &mut BTreeSet::new());
+    let mut schema = input_container(&registry, format, &mut BTreeSet::new());
+    if canonical == "LwPolyline" {
+        for field in ["bulge", "start_width", "end_width", "vertex_id"] {
+            schema["properties"]["vertices"]["items"]["properties"][field]["default"] =
+                if field == "vertex_id" {
+                    json!(0)
+                } else {
+                    json!(0.0)
+                };
+        }
+    }
     schemas.insert(key, schema.clone());
     Ok(schema)
 }

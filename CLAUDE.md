@@ -293,6 +293,22 @@ arrows and popups mirror in Arabic. `src/test/setup.ts` (vitest `setupFiles`) st
   inputs and derives payload aliases; window-only choices and output models stay in the API.
   The window reads generated words in registry order, with the canonical word before aliases.
 
+Input shorthand (3 November 2026): decision accepts `action` for `kind` and bare
+`type:"set"|"list"`; records conditions accept `field`, a single summary field/value,
+and `block` for `block_name`. Text query `contains` filters before paging; measure accepts
+up to 200 handles. Capture widths above the rendering limit are clamped and disclosed.
+Creation defaults LwPolyline vertex `bulge`, `start_width`, `end_width`, `vertex_id` to zero.
+Wall openings accept `mark` at creation. Layer assignments create missing layers in the
+same undo step and return `layer_created` advice. Tables accept row data, `columns` headers,
+`col_widths` and `text_height`; rows and columns are inferred. A sole `dim_edit` operation
+field infers `op`; `line_point` moves a linear/aligned dimension line. Viewport frame/centre
+record edits name the `mview` target form. Unknown check rules suggest the nearest valid name.
+Method input defaults scope to the drawing (`project`, also accepts `drawing`), title to name,
+based_on to `none`, source_note to empty, and term labels to their factor expressions;
+rule and term citations remain required. Inferred values appear in `defaults_used`, including
+nested batches. Quantities remain per-element expressions; totals sum evaluated values
+without parsing an ever-growing expression. No new standard or measurement facts are supplied.
+
 ## Records
 
 - `qiyas-core/src/records.rs`: every object as a record, `{key, type, …summary, data}`, where
@@ -3948,7 +3964,7 @@ autonomous. Audit and plan: `docs/2026-10-29-*.md` (one note per part).
   check close quantity jobs only. Each named tidy sheet is For review; one final review line is
   enough. The brief's facts are never invented, and quantity sources/measurement rulings remain.
 - `qiyas-ai/src/drawing_kit.txt` puts compact complete command forms and filled examples in the
-  execute tool description, shared by Mizan and MCP. It is 9,072 UTF-8 bytes, guarded at 9,216:
+  execute tool description, shared by Mizan and MCP. It is guarded at 9,216 UTF-8 bytes:
   all draw kinds, batches, computed geometry (`generate`), text, dimensions, walls/openings, block definition/insertion/editing, move/copy/
   arrays, hatches, sheets/title blocks, properties and records. Examples are syntax, not shipped
   design content. Tests validate their registry schemas and watch for omitted command fields.

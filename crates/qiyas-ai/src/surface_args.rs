@@ -110,7 +110,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         ),
         (CAPTURE, "document") => (
             object(
-                json!({"path":string,"page":{"type":"integer","minimum":1},"width":{"type":"integer","minimum":64,"maximum":1600}}),
+                json!({"path":string,"page":{"type":"integer","minimum":1},"width":{"type":"integer","minimum":64,"description":"Rendered width is clamped to 1600 pixels; the caption reports clamping"}}),
                 &["path", "page"],
             ),
             json!({"path":"drawing.pdf","page":1}),
@@ -245,7 +245,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
             json!({"bounds":[[0,0],[10,10]],"width":1200}),
         ),
         (READ, "measure") => (
-            json!({"anyOf":[object(json!({"handle":handle,"chain":handles}), &["handle"]),object(json!({"points":points,"closed":boolean}), &["points"])]}),
+            json!({"anyOf":[object(json!({"handle":handle,"chain":handles}), &["handle"]),object(json!({"handles":{"type":"array","minItems":1,"maxItems":200,"items":handle},"chain":handles}), &["handles"]),object(json!({"points":points,"closed":boolean}), &["points"])]}),
             json!({"handle":1}),
         ),
         (READ, "query") => {
@@ -279,6 +279,7 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
                             required.push("handle");
                         }
                         "texts" => {
+                            props["contains"] = json!({"type":"string","description":"Case-insensitive text filter, before paging"});
                             props["layer"] = nullable(&string);
                             props["bounds"] = nullable(&bounds);
                             props["sheet"] = nullable(&string);

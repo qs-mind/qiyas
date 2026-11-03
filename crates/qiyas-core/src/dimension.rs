@@ -147,6 +147,8 @@ pub enum DimEditOp {
     Flip,
     /// Puts the text's middle at this point.
     MoveText([f64; 2]),
+    /// Moves a linear or aligned dimension line through this point.
+    LinePoint([f64; 2]),
 }
 
 /// The common fields of a dimension style, in drawing units (before its scale).
@@ -1227,20 +1229,32 @@ impl Session {
     /// `Command::DimEdit`: changes the dimension `target` by `op` and rebuilds its block.
     pub(crate) fn dim_edit(&mut self, target: &Target, op: &DimEditOp) -> Result<(), CoreError> {
         let (h, mut d) = self.dimension_target(target)?;
-        let base = d.base_mut();
         match op {
             DimEditOp::TextOverride(text) => {
                 if text.contains(['\n', '\r']) {
                     return Err(invalid("A dimension's text takes one line"));
                 }
-                base.set_text_override((!text.is_empty()).then(|| text.clone()));
+                d.base_mut()
+                    .set_text_override((!text.is_empty()).then(|| text.clone()));
             }
             DimEditOp::Flip => {
+                let base = d.base_mut();
                 base.flip_arrow1 = !base.flip_arrow1;
                 base.flip_arrow2 = !base.flip_arrow2;
             }
+            DimEditOp::LinePoint(p) => {
+                finite(&[*p])?;
+                let (_, end, _, axis) = linear_parts(&d).ok_or_else(|| invalid("dim_edit line_point needs a linear or aligned dimension; use move_text for its label"))?;
+                let normal = [-axis[1], axis[0]];
+                let offset = dot(sub(*p, end), normal);
+                d.set_definition_point(v3([
+                    end[0] + normal[0] * offset,
+                    end[1] + normal[1] * offset,
+                ]));
+            }
             DimEditOp::MoveText(p) => {
                 finite(&[*p])?;
+                let base = d.base_mut();
                 base.text_middle_point = v3(*p);
                 base.text_user_positioned = true;
             }

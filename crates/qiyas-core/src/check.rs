@@ -1548,8 +1548,12 @@ impl CheckScope {
     pub fn validate(&self) -> Result<(), crate::CoreError> {
         if let Some(rule) = self.rules.iter().find(|r| !RULES.contains(&r.as_str())) {
             return Err(crate::CoreError::InvalidCommand(format!(
-                "Unknown drawing check {rule}. Choose: {}",
-                RULES.join(", ")
+                "check_drawing rules: unknown rule {rule}. Choose: {}. Nearest valid choice: {}",
+                RULES.join(", "),
+                RULES
+                    .iter()
+                    .min_by_key(|choice| crate::validation::edit_distance(rule, choice))
+                    .unwrap()
             )));
         }
         if let Some(pack) = self

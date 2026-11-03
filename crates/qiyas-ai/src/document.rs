@@ -127,5 +127,10 @@ pub(crate) fn capture(args: &Value) -> Result<ToolOutput, ToolError> {
     let pixmap = tiny_skia::Pixmap::from_vec(image.into_raw(), size)
         .ok_or_else(|| error("Invalid page pixels"))?;
     let png = pixmap.encode_png().map_err(error)?;
-    Ok(ToolOutput::Image{png,caption:format!("{} page {page}: {w} × {h} PDF points, bottom-left origin, y up. Image {} × {} pixels, top-left origin. Convert image pixels with x * {w} / {}, y = {h} - y * {h} / {}. Calibrate a known distance before recognition.vision; no drawing was changed.",path.display(),size.width(),size.height(),size.width(),size.height())})
+    let clamp_note = if args["width"].as_u64().is_some_and(|w| w > 1600) {
+        " Width clamped to the maximum of 1600 pixels."
+    } else {
+        ""
+    };
+    Ok(ToolOutput::Image{png,caption:format!("{} page {page}: {w} × {h} PDF points, bottom-left origin, y up. Image {} × {} pixels, top-left origin. Convert image pixels with x * {w} / {}, y = {h} - y * {h} / {}. Calibrate a known distance before recognition.vision; no drawing was changed.{clamp_note}",path.display(),size.width(),size.height(),size.width(),size.height())})
 }

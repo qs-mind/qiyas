@@ -1998,6 +1998,20 @@ impl Session {
         if matches!(cmd, Command::SaveLayerState { .. }) {
             self.prepare_layer_states();
         }
+        if let Command::SetCurrent { current } = &cmd {
+            if !self.drawing.doc.layers.contains(current.layer.trim()) {
+                let current = current.clone();
+                return self.transaction(source, &label, |s| {
+                    s.run_as(
+                        Command::NewLayer {
+                            name: current.layer.clone(),
+                        },
+                        source,
+                    )?;
+                    s.run_as(Command::SetCurrent { current }, source)
+                });
+            }
+        }
         let before = match cmd.changes() {
             None => return self.execute(cmd, source),
             Some(Part::Document { tables, takeoff }) => {

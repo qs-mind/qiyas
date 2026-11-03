@@ -1154,6 +1154,16 @@ impl Session {
     pub(crate) fn document_extras(&self, cmd: &Command) -> (bool, bool) {
         let edited;
         let (targets, copying, erasing) = match cmd {
+            Command::SetProperty {
+                prop: crate::props::EntityProp::Layer,
+                value,
+                ..
+            } if value
+                .as_str()
+                .is_some_and(|name| !self.drawing.doc.layers.contains(name.trim())) =>
+            {
+                return (true, true)
+            }
             Command::Walls(_)
             | Command::AddWallOpenings { .. }
             | Command::RemoveWallOpenings { .. }

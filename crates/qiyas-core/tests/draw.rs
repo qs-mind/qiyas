@@ -133,10 +133,10 @@ fn the_current_state_styles_new_entities_is_saved_and_is_no_undo_step() {
     assert_eq!(again.current.layer, "A-WALL");
     assert_eq!(again.current.color, "ACI 3");
 
-    // Refused: a layer the drawing lacks, a colour, a linetype or a weight that isn't one.
+    // Refused: an invalid layer name, colour, linetype or weight.
     for bad in [
         Current {
-            layer: "NOPE".into(),
+            layer: "BAD/NAME".into(),
             ..Current::default()
         },
         Current {

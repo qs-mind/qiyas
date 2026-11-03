@@ -123,6 +123,16 @@ fn is_reserved(name: &str) -> bool {
 }
 
 impl Session {
+    /// Create a named assignment layer when it is missing.
+    pub(crate) fn ensure_named_layer(&mut self, name: &str) -> Result<(), CoreError> {
+        if self.drawing.doc.layers.contains(name.trim()) {
+            return Ok(());
+        }
+        let name = check_layer_name(name)?;
+        self.ensure_layer(name, Color::Index(7));
+        Ok(())
+    }
+
     /// The names of the drawing's layer states, as stored.
     pub(crate) fn layer_state_names(&self) -> Vec<String> {
         self.drawing
@@ -268,6 +278,7 @@ impl Session {
             }
             return Ok(());
         }
+        self.ensure_named_layer(name)?;
         let name = own_layer(&self.drawing.doc, name)?;
         let linetype = match prop {
             LayerProp::Linetype => {
@@ -340,7 +351,9 @@ impl Session {
         }
         let mut layer = Layer::new(name);
         layer.handle = doc.allocate_handle();
-        doc.layers.add(layer).map_err(invalid)
+        doc.layers.add(layer).map_err(invalid)?;
+        self.last_advice.push(serde_json::json!({"code":"layer_created","name":name,"message":format!("Created layer {name}."),"message_ar":format!("أُنشئت الطبقة {name}.")}));
+        Ok(())
     }
 
     /// `Command::DeleteLayer`: never layer 0, Defpoints, the current layer or one with entities

@@ -254,3 +254,31 @@ fn record_replacements_keep_serde_defaults_and_optional_fields_optional() {
     assert!(report.valid, "{report:?}");
     session.run(parse_command(input).unwrap()).unwrap();
 }
+
+#[test]
+fn viewport_frame_and_centre_refusals_give_the_mview_target_form() {
+    let mut s = Session::new_blank(std::path::Path::new("tower-sheets.dxf"), 6);
+    s.run_input(
+        &json!({"type":"new_layout","name":"Tower floor","paper":"ISO A3","orientation":"landscape"}),
+        Source::Ai,
+    )
+    .unwrap();
+    s.run_input(
+        &json!({"type":"set_sheet","block":"Tower floor"}),
+        Source::Ai,
+    )
+    .unwrap();
+    let out = s.run_input(&json!({"type":"mview","corner1":[20,20],"corner2":[350,250],"centre":[24,16],"scale":"1:100"}), Source::Ai).unwrap();
+    let value = serde_json::to_value(out).unwrap();
+    let handle = value["handles"][0].as_u64().unwrap();
+    for path in ["width", "view_center.x", "/width", "/center/x"] {
+        let error = s.run_input(&json!({"type":"set_records","collection":"viewports","updates":[{"key":handle,"path":path,"value":350}]}), Source::Ai).unwrap_err().to_string();
+        assert!(
+            error.contains("mview")
+                && error.contains("target:{handle:")
+                && error.contains("corner1")
+                && error.contains("centre"),
+            "{error}"
+        );
+    }
+}

@@ -141,6 +141,7 @@ pub fn parse_command(mut value: Value) -> Result<Command, String> {
 }
 
 pub fn canonicalize(value: &mut Value) {
+    crate::input_aliases::normalize(value);
     let Some(name) = value["type"].as_str() else {
         return;
     };
@@ -191,6 +192,7 @@ pub fn canonicalize(value: &mut Value) {
     if value["type"] == "records" && value["query"]["where"].is_object() {
         value["query"]["where"] = json!([value["query"]["where"]]);
     }
+    crate::input_aliases::normalize(value);
     normalize_handles(&info.schema, value, "");
     if value["type"] == "set_records" && value["collection"] == "entities" {
         if let Some(updates) = value["updates"].as_array_mut() {
@@ -450,6 +452,7 @@ impl Registry {
                 c.schema["required"] = json!(["type"]);
                 c.schema["anyOf"] = json!([{"required":["targets"]},{"required":["handles"]}]);
             }
+            crate::input_aliases::schema(&c.name, &mut c.schema);
             describe_defaults(&mut c.schema);
             let mut words = String::new();
             schema_words(&c.schema, &mut words);

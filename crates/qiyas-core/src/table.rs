@@ -216,6 +216,31 @@ impl Session {
         row_height: f64,
         data: &[Vec<String>],
     ) -> Result<u64, CoreError> {
+        self.add_table_sized(at, rows, cols, col_width, row_height, data, &[], None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn add_table_sized(
+        &mut self,
+        at: [f64; 2],
+        rows: usize,
+        cols: usize,
+        col_width: f64,
+        row_height: f64,
+        data: &[Vec<String>],
+        col_widths: &[f64],
+        text_height: Option<f64>,
+    ) -> Result<u64, CoreError> {
+        if !col_widths.is_empty()
+            && (col_widths.len() != cols || col_widths.iter().any(|w| !w.is_finite() || *w <= 0.0))
+        {
+            return Err(invalid(
+                "table col_widths needs one positive width per column",
+            ));
+        }
+        if text_height.is_some_and(|h| !h.is_finite() || h <= 0.0) {
+            return Err(invalid("table text_height must be positive"));
+        }
         finite(&[at[0], at[1], col_width, row_height])?;
         if rows == 0 || cols == 0 {
             return Err(invalid("A table needs one row and one column at least"));
@@ -242,10 +267,13 @@ impl Session {
             })
             .min_by_key(|s| !s.name.eq_ignore_ascii_case("Standard"))
             .map(|s| s.handle);
-        let height = row_height * TEXT_IN_ROW;
+        let height = text_height.unwrap_or(row_height * TEXT_IN_ROW);
         let mut t = Table::new(Vector3::new(at[0], at[1], 0.0), rows, cols);
         t.table_style_handle = table_style;
         t.set_uniform_column_width(col_width);
+        for (col, width) in col_widths.iter().enumerate() {
+            t.set_column_width(col, *width);
+        }
         t.set_uniform_row_height(row_height);
         for row in &mut t.rows {
             for cell in &mut row.cells {

@@ -171,7 +171,7 @@ fn the_general_properties_of_a_line() {
     set(&mut s, line, EntityProp::Linetype, json!("ByLayer"));
     assert_eq!(entity(&s, line).common().linetype, "");
     for (prop, value) in [
-        (EntityProp::Layer, json!("NOPE")),
+        (EntityProp::Layer, json!("BAD/NAME")),
         (EntityProp::Color, json!("not-a-color")),
         (EntityProp::Lineweight, json!(3)),
         (EntityProp::Text, json!("x")),

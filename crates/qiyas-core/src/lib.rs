@@ -39,6 +39,7 @@ mod groups;
 mod handle_refs;
 mod image;
 mod input;
+mod input_aliases;
 mod input_context_defaults;
 mod inquiry;
 mod job_checks;

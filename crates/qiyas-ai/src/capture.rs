@@ -212,6 +212,11 @@ pub(crate) fn picture(session: &Session, look: &Look) -> Result<(Vec<u8>, String
         drawn.height,
         pixel_size(session, &sheet, px),
     );
+    if look.width > MAX_SIDE {
+        caption.push_str(&format!(
+            " Width clamped to the maximum of {MAX_SIDE} pixels."
+        ));
+    }
     if !shown.is_empty() {
         caption.push_str(&format!(" Pictures: {}.", shown.join(", ")));
     }

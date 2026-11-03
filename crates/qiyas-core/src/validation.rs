@@ -282,6 +282,14 @@ impl Session {
                 &data,
             );
             for (field, value) in [("col_width", width), ("row_height", height)] {
+                if field == "col_width"
+                    && input["col_widths"]
+                        .as_array()
+                        .is_some_and(|widths| !widths.is_empty())
+                {
+                    defaults.retain(|d| d.field != format!("{prefix}/col_width"));
+                    continue;
+                }
                 if input.get(field).is_none_or(|v| v.as_f64() == Some(0.0)) {
                     let path = format!("{prefix}/{field}");
                     defaults.retain(|d| d.field != path);
@@ -404,7 +412,9 @@ fn validate_at(
         report.error("invalid_value", path, "A command must be an object");
         return report;
     }
-    let Some(name) = value.get("type").and_then(Value::as_str) else {
+    let mut named = value.clone();
+    crate::input_aliases::normalize(&mut named);
+    let Some(name) = named.get("type").and_then(Value::as_str) else {
         report.error(
             if value.get("type").is_none() {
                 "missing_field"
@@ -425,13 +435,16 @@ fn validate_at(
         );
         return report;
     };
-    let info = value
+    let info = named
         .get("kind")
         .and_then(Value::as_str)
         .and_then(|kind| reg.get(&format!("{name}.{kind}")))
         .unwrap_or(top);
     let mut canonical = value.clone();
     crate::registry::canonicalize(&mut canonical);
+    report
+        .defaults_used
+        .extend(crate::input_aliases::defaults(value, &canonical, path));
     walk(&info.schema, &canonical, path, step, &mut report);
     report.warnings.extend(
         crate::registry::normalization_warnings(value)
@@ -441,6 +454,51 @@ fn validate_at(
                 w
             }),
     );
+    if info.name == "table" {
+        for field in ["rows", "cols"] {
+            if canonical.get(field).is_none() {
+                report.error(
+                    "missing_field",
+                    &pointer(path, field),
+                    format!("table needs {field}, or row data to infer rows and cols"),
+                );
+            }
+        }
+    }
+    if info.name == "dim_edit" && canonical.get("op").is_none() {
+        report.error("missing_field", &pointer(path, "op"), "dim_edit needs exactly one operation: {text_override:text}, {move_text:[x,y]}, {line_point:[x,y]} or \"flip\". These fields can also be supplied without op.");
+    }
+    if info.name == "dim_edit"
+        && canonical.get("op").is_some()
+        && ["line_point", "move_text", "text_override", "flip"]
+            .iter()
+            .any(|field| canonical.get(*field).is_some())
+    {
+        report.error("invalid_value", &pointer(path, "op"), "dim_edit: use op or one of line_point, move_text, text_override, flip; do not mix operations.");
+    }
+    if info.name.starts_with("decision.")
+        && canonical.get("action").is_some()
+        && canonical["action"] != canonical["kind"]
+    {
+        report.error(
+            "invalid_value",
+            &pointer(path, "action"),
+            "decision action and kind must agree; choose set or list.",
+        );
+    }
+    if info.name == "measurement.set_mappings" {
+        if let Some(mappings) = canonical["mappings"].as_array() {
+            for (index, mapping) in mappings.iter().enumerate() {
+                for field in ["quantity", "expression", "rule"] {
+                    if mapping[field].as_str().is_some_and(literal_sum)
+                        || (field == "quantity" && mapping[field].is_number())
+                    {
+                        report.error("invalid_value", &format!("{path}/mappings/{index}/{field}"), "measurement.set_mappings quantities come from the drawing. Use geometry.* in a measurement.set_method per-element rule, then map its rule ID; do not supply a literal sum of quantities.");
+                    }
+                }
+            }
+        }
+    }
     if info.name == "set_layer" && canonical.get("prop").is_some() {
         for key in [
             "color",
@@ -892,6 +950,29 @@ fn choice_hint(schema: &Value) -> Option<Vec<Value>> {
     Some(choices)
 }
 
+fn literal_sum(text: &str) -> bool {
+    text.contains('+')
+        && text
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_whitespace() || ".+-*/()eE".contains(c))
+}
+
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
+    let mut row: Vec<usize> = (0..=b.chars().count()).collect();
+    for (i, a) in a.chars().enumerate() {
+        let mut previous = row[0];
+        row[0] = i + 1;
+        for (j, b) in b.chars().enumerate() {
+            let old = row[j + 1];
+            row[j + 1] = (previous + usize::from(a != b))
+                .min(row[j] + 1)
+                .min(old + 1);
+            previous = old;
+        }
+    }
+    *row.last().unwrap()
+}
+
 fn schema_error(
     schema: &Value,
     error: &jsonschema::ValidationError<'_>,
@@ -908,7 +989,9 @@ fn schema_error(
             out.error(
                 "missing_field",
                 &pointer(&path, key),
-                format!("Missing required field {key}"),
+                if key == "citation" {
+                    "Missing required field citation: every quantity must have a source; supply {source, clause}.".into()
+                } else { format!("Missing required field {key}") },
             );
             return;
         }
@@ -941,7 +1024,24 @@ fn schema_error(
         }
         Kind::Type { .. } => format!("Expected {constraint}"),
         Kind::Constant { expected_value } => format!("Expected {expected_value}"),
-        Kind::Enum { options } => format!("Choose one of {options}"),
+        Kind::Enum { options } if !path.contains("/rules/") => format!("Choose one of {options}"),
+        Kind::Enum { options } => {
+            let value = error.instance();
+            let nearest = value.as_str().and_then(|name| {
+                options.as_array().and_then(|choices| {
+                    choices
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .min_by_key(|choice| edit_distance(name, choice))
+                })
+            });
+            format!(
+                "Choose one of {options}{}",
+                nearest
+                    .map(|name| format!("; nearest valid choice: {name}"))
+                    .unwrap_or_default()
+            )
+        }
         Kind::FalseSchema => "This value is not allowed".into(),
         Kind::Minimum { .. }
         | Kind::Maximum { .. }

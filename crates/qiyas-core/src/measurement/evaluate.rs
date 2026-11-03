@@ -568,19 +568,22 @@ fn line(
         decision: None,
     })
 }
-fn total(context: &Context<'_>, lines: &[DimensionLine]) -> Result<f64, CoreError> {
-    let expression = lines
+fn total(lines: &[DimensionLine]) -> Result<f64, CoreError> {
+    // Values already carry their per-element sources; do not parse a growing literal sum.
+    let total: f64 = lines
         .iter()
-        .filter(|l| l.included)
-        .map(|l| format!("({})", l.value))
-        .collect::<Vec<_>>()
-        .join(" + ");
-    if expression.is_empty() {
-        Ok(0.0)
+        .filter(|line| line.included)
+        .map(|line| line.value)
+        .sum();
+    if total.is_finite() {
+        Ok(total)
     } else {
-        context.number(&expression)
+        Err(invalid(
+            "Measurement total is not finite; check the per-element quantities",
+        ))
     }
 }
+
 fn template(template: &str, context: &Context<'_>) -> Result<String, CoreError> {
     let mut result = String::new();
     let mut rest = template;
@@ -839,7 +842,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                     lines.push(entry);
                 }
             }
-            let raw = total(&context, &lines)?;
+            let raw = total(&lines)?;
             let limited = raw < 0.0;
             if limited {
                 // Never a negative quantity, and never a refused method: the quantity is limited
@@ -935,7 +938,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
             let quantity = if limited {
                 0.0
             } else {
-                total(&context, &lines)?.max(0.0)
+                total(&lines)?.max(0.0)
             };
             let confidence =
                 lines
@@ -1134,7 +1137,7 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
                 existing.limited |= item.limited;
                 existing.assumed |= item.assumed;
                 existing.lines.extend(item.lines);
-                existing.quantity = total(&context, &existing.lines)?.max(0.0);
+                existing.quantity = total(&existing.lines)?.max(0.0);
                 for c in item.mapping_citations {
                     if !existing.mapping_citations.contains(&c) {
                         existing.mapping_citations.push(c);
@@ -1199,4 +1202,43 @@ pub(super) fn derive(s: &Session) -> Result<MeasurementReport, CoreError> {
     report.warnings.sort();
     report.warnings.dedup();
     Ok(report)
+}
+
+#[cfg(test)]
+mod sum_tests {
+    use super::*;
+
+    #[test]
+    fn tower_mapping_totals_do_not_parse_an_unbounded_literal_expression() {
+        let mut lines = Vec::new();
+        for _ in 0..80 {
+            for value in [6.27375_f64, -3.898125_f64] {
+                lines.push(DimensionLine {
+                    id: String::new(),
+                    operands: vec![],
+                    label: "Wall face".into(),
+                    operation: if value > 0.0 {
+                        Operation::Add
+                    } else {
+                        Operation::Deduct
+                    },
+                    timesing: 1.0,
+                    factors: vec![value.abs()],
+                    source_expressions: vec!["geometry.area".into()],
+                    expression: value.to_string(),
+                    value,
+                    unit: "m2".into(),
+                    method: "Tower geometry".into(),
+                    citations: vec![Citation {
+                        source: "drawing".into(),
+                        clause: "Wall paths and hosted openings".into(),
+                    }],
+                    sources: vec![],
+                    included: true,
+                    decision: None,
+                });
+            }
+        }
+        assert!((total(&lines).unwrap() - 80.0 * (6.27375 - 3.898125)).abs() < 1e-9);
+    }
 }

@@ -19,6 +19,13 @@ fn invalid(message: impl Into<String>) -> CoreError {
 fn one() -> String {
     "1".into()
 }
+fn no_basis() -> String {
+    "none".into()
+}
+fn drawing_scope() -> MethodScope {
+    MethodScope::Project
+}
+
 fn version_one() -> u32 {
     1
 }
@@ -61,6 +68,7 @@ pub enum Operation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Term {
+    #[serde(default)]
     pub label: String,
     pub operation: Operation,
     #[serde(default = "one")]
@@ -157,8 +165,11 @@ pub struct RuleSet {
     #[serde(default = "version_one")]
     pub version: u32,
     pub name: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default = "no_basis")]
     pub based_on: String,
+    #[serde(default)]
     pub source_note: String,
     pub rules: Vec<Rule>,
 }
@@ -194,6 +205,7 @@ impl MethodSelection {
 #[serde(rename_all = "snake_case")]
 pub enum MethodScope {
     Settings,
+    #[serde(alias = "drawing")]
     Project,
 }
 
@@ -207,6 +219,7 @@ pub enum MeasurementCommand {
     #[schemars(example = json!({"kind":"set_method","scope":"project","method":{"version":1,"name":"observed","title":"Geometry","based_on":"drawing","source_note":"Visible geometry","rules":[{"id":"count","kind":"count","basis":"geometric","element_type":"Observed","unit":"pcs","terms":[{"label":"Count","operation":"add","factors":["geometry.count"],"citation":{"source":"drawing","clause":"insert"}}],"citation":{"source":"drawing","clause":"insert"}}]}}))]
     #[schemars(extend("x-takeoff-kit" = {"order":50,"example":1,"batch":40,"phase":"method"}))]
     SetMethod {
+        #[serde(default = "drawing_scope")]
         scope: MethodScope,
         method: Option<Box<RuleSet>>,
     },

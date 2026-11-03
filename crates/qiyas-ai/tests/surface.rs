@@ -3371,3 +3371,127 @@ async fn quantity_completion_without_a_fresh_phase_check_gets_advice() {
     );
     assert!(messages.contains("phase_check_needed"));
 }
+
+#[test]
+fn failed_text_filter_measure_list_and_decision_action_are_accepted() {
+    let mut s = Session::new_blank(std::path::Path::new("tower-floor.dxf"), 6);
+    for (i, text) in ["ELECTRICAL RISER", "Meeting room", "Mechanical riser"]
+        .iter()
+        .enumerate()
+    {
+        s.run_input(
+            &json!({"type":"text","at":[i as f64 * 10.0,0],"value":text}),
+            Source::Ai,
+        )
+        .unwrap();
+    }
+    let result = call(
+        &mut s,
+        READ,
+        json!({"op":"query","args":"{\"kind\":\"texts\",\"contains\":\"RISER\"}"}),
+    )
+    .unwrap();
+    assert_eq!(result["total"], 2, "{result}");
+    let mut handles = Vec::new();
+    for length in [48, 32, 24, 16] {
+        let out = s
+            .run_input(
+                &json!({"type":"draw","kind":"line","a":[0,0],"b":[length,0]}),
+                Source::Ai,
+            )
+            .unwrap();
+        let qiyas_core::Outcome::Added { handles: added } = out.outcome else {
+            panic!("line")
+        };
+        handles.push(added[0]);
+    }
+    let measured = call(
+        &mut s,
+        READ,
+        json!({"op":"measure","args":{"handles":handles}}),
+    )
+    .unwrap();
+    let rows = measured["measurements"].as_array().unwrap();
+    assert_eq!(rows.len(), 4);
+    for (row, (handle, length)) in rows
+        .iter()
+        .zip(handles.iter().zip([48.0, 32.0, 24.0, 16.0]))
+    {
+        assert_eq!(row["handle"], *handle);
+        assert_eq!(row["length_m"], length);
+    }
+    call(
+        &mut s,
+        READ,
+        json!({"op":"run","args":{"command":{"type":"decision","action":"list"}}}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn unknown_drawing_rule_lists_choices_and_the_nearest_rule() {
+    let mut s = Session::new_blank(std::path::Path::new("tower-check.dxf"), 6);
+    for rule in ["outside_boundary", "duplicat"] {
+        let error = call(
+            &mut s,
+            READ,
+            json!({"op":"check","args":{"rules":["part_overlap","duplicate",rule]}}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("check") && error.contains("/args/rules/2"),
+            "{error}"
+        );
+        assert!(
+            error.contains("nearest valid choice")
+                && error.contains("job_limit")
+                && error.contains("duplicate"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn oversized_document_capture_is_clamped_and_reports_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let input =
+        json!({"source":"document","args":{"path":"tower-floor.pdf","page":1,"width":1800}});
+    assert!(surface::route(CAPTURE, &input).is_ok());
+    if !qiyas_pdf::available() {
+        return;
+    }
+    let pdf = qiyas_pdf::fixtures::write_wall(dir.path());
+    let mut s = Session::new_blank(&dir.path().join("tower.dxf"), 6);
+    let ToolOutput::Image { png, caption } = surface::run_session(
+        &mut s,
+        CAPTURE,
+        "document",
+        &json!({"path":pdf,"page":1,"width":1800}),
+        Source::Ai,
+    )
+    .unwrap() else {
+        panic!("picture")
+    };
+    assert!(
+        caption.contains("clamped") && caption.contains("1600"),
+        "{caption}"
+    );
+    let width = u32::from_be_bytes(png[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(png[20..24].try_into().unwrap());
+    assert!(width <= 1600 && height <= 1600);
+}
+
+#[test]
+fn surface_preserves_inferred_defaults_through_prepare_and_batch() {
+    let mut s = Session::new_blank(std::path::Path::new("tower-tables.dxf"), 6);
+    let out = call(&mut s, EXECUTE, json!({"op":"run","args":{"command":{"type":"batch","commands":[{"type":"table","at":[60,30],"columns":["Floor","Area m2"],"rows":[["Typical","1536"]],"col_widths":[4,2],"row_height":0.42,"text_height":0.14}]}}})).unwrap();
+    assert!(
+        out["defaults_used"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["field"] == "/commands/0/rows" && d["value"] == 2),
+        "{out}"
+    );
+}

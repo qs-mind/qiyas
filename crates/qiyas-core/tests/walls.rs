@@ -768,3 +768,41 @@ fn added_opening_uses_a_drawing_symbol_and_missing_symbol_rolls_back() {
         before
     );
 }
+
+#[test]
+fn opening_marks_are_accepted_at_creation_and_survive_rebuilds() {
+    let mut s = Session::new_blank(std::path::Path::new("tower-core.dxf"), 6);
+    let out = s.run_input(&json!({"type":"walls","runs":[{"points":[[0,0],[48,0]]}],"thickness":0.15,"height":3.9,"openings":[{"run":0,"at":3.7,"width":1,"kind":"door","head":2.4,"mark":"D-M1"}]}), qiyas_core::Source::Ai).unwrap();
+    let Outcome::Walls { result } = out.outcome else {
+        panic!("walls")
+    };
+    assert_eq!(
+        s.wall_groups(None).unwrap()[0].runs[0].openings[0]
+            .mark
+            .as_deref(),
+        Some("D-M1")
+    );
+    s.run_input(&json!({"type":"add_wall_openings","centreline":result.centrelines[0],"openings":[{"at":12,"width":1,"kind":"door","head":2.4,"mark":"D-M2"}]}), qiyas_core::Source::Ai).unwrap();
+    let groups = s.wall_groups(None).unwrap();
+    assert_eq!(groups[0].runs[0].openings[0].mark.as_deref(), Some("D-M1"));
+    assert_eq!(groups[0].runs[0].openings[1].mark.as_deref(), Some("D-M2"));
+    let insert = groups[0].runs[0].openings[1].insert;
+    s.run_input(
+        &json!({"type":"edit_wall_opening","insert":insert,"edit":{"mark":"D-M3","width":1.2}}),
+        qiyas_core::Source::Ai,
+    )
+    .unwrap();
+    assert_eq!(
+        s.wall_groups(None).unwrap()[0].runs[0].openings[1]
+            .mark
+            .as_deref(),
+        Some("D-M3")
+    );
+    assert!(s.undo());
+    assert_eq!(
+        s.wall_groups(None).unwrap()[0].runs[0].openings[1]
+            .mark
+            .as_deref(),
+        Some("D-M2")
+    );
+}
