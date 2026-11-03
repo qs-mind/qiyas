@@ -551,7 +551,10 @@ impl Qiyas {
         }
         let output = output.map(|output| crate::normalise::output(output, &warnings))?;
         let args = surface::args_of(input).map_err(ToolError::BadInput)?;
-        let op = input["op"].as_str().unwrap_or_default();
+        let op = input["op"]
+            .as_str()
+            .or_else(|| input["source"].as_str())
+            .unwrap_or_default();
         let mut output = surface::format_result(name, op, &args, output)?;
         match &mut output {
             ToolOutput::Json(value) if args["detail"] != "full" => crate::result::deduplicate(
@@ -568,9 +571,11 @@ impl Qiyas {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 if last.as_ref() == Some(&hash) {
-                    return Ok(ToolOutput::Json(
-                        serde_json::json!({"status":"unchanged","image_hash":hash,"caption":caption}),
-                    ));
+                    let mut value: Value =
+                        serde_json::from_str(caption).expect("formatted capture caption");
+                    value["outcome"]["data"]["status"] = serde_json::json!("unchanged");
+                    value["outcome"]["data"]["image_hash"] = serde_json::json!(hash);
+                    return Ok(ToolOutput::Json(value));
                 }
                 *last = Some(hash);
             }
@@ -741,7 +746,7 @@ impl ServerHandler for Qiyas {
             Ok(target) => target,
             Err(error) => {
                 return Ok(CallToolResult::error(vec![ContentBlock::text(
-                    error.json().to_string(),
+                    crate::result::error(error.json()).to_string(),
                 )])
                 .into())
             }
@@ -954,8 +959,11 @@ mod tests {
         assert_eq!(artifact.len(), 64);
         assert_eq!(
             out,
-            serde_json::json!({"plan":{"phases":phases},"revision":null,"status":"ok","artifact":artifact,
+            crate::result_envelope::wrap(
+                "plan",
+                serde_json::json!({"plan":{"phases":phases},"revision":null,"status":"ok","artifact":artifact,
                 "added":[],"added_count":0,"changed":[],"changed_count":0,"removed":[],"removed_count":0})
+            )
         );
         assert!(server.run_cached(surface::EXECUTE, &input).1);
     }
@@ -1198,8 +1206,11 @@ mod tests {
             panic!("JSON")
         };
         // Compact contracts are small and always come back whole, on a new connection too.
-        assert!(again["signature"].is_string());
-        assert_eq!(first["signature"], again["signature"]);
+        assert!(again["outcome"]["data"]["signature"].is_string());
+        assert_eq!(
+            first["outcome"]["data"]["signature"],
+            again["outcome"]["data"]["signature"]
+        );
         let ToolOutput::Json(picture) = next
             .run(
                 surface::CAPTURE,
@@ -1209,7 +1220,7 @@ mod tests {
         else {
             panic!("no image without confirmed support")
         };
-        assert_eq!(picture["status"], "unavailable");
+        assert_eq!(picture["outcome"]["data"]["status"], "unavailable");
         let cache = EvidenceCache {
             contracts: server.known_contracts.clone(),
             picture: server.last_picture.clone(),
@@ -1260,7 +1271,7 @@ mod tests {
         else {
             panic!("JSON");
         };
-        assert_eq!(value["completed"], true);
+        assert_eq!(value["outcome"]["data"]["completed"], true);
         assert_eq!(value["statuses"][0]["kind"], "open_phases");
         assert_eq!(value["statuses"][0]["language"], "ar");
         assert!(value.get("answer").is_none());

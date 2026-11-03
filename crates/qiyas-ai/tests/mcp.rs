@@ -146,7 +146,7 @@ async fn lists_the_catalogue_and_measures_as_mcp() {
     .await;
     assert_ne!(result.is_error, Some(true), "{result:?}");
     let out: Value = serde_json::from_str(text(&result, 0)).unwrap();
-    assert_eq!(out["outcome"]["measurement"]["source"], "mcp");
+    assert_eq!(out["outcome"]["data"]["measurement"]["source"], "mcp");
     {
         let guard = server.session.lock().unwrap();
         let items = &guard.as_ref().unwrap().takeoff.items;
@@ -245,7 +245,7 @@ async fn concurrent_counts_both_land() {
     for result in [&a, &b] {
         assert_ne!(result.is_error, Some(true), "{result:?}");
         let out: Value = serde_json::from_str(text(result, 0)).unwrap();
-        assert_eq!(out["outcome"]["measurement"]["value"], 3.0);
+        assert_eq!(out["outcome"]["data"]["measurement"]["value"], 3.0);
     }
     let guard = server.session.lock().unwrap();
     assert_eq!(guard.as_ref().unwrap().takeoff.items.len(), 2);
@@ -286,7 +286,7 @@ async fn tool_errors_are_error_results() {
     .await;
     assert_eq!(result.is_error, Some(true));
     assert_eq!(
-        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["message"],
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["outcome"]["data"]["message"],
         "No entity with handle 999999"
     );
 
@@ -300,11 +300,11 @@ async fn tool_errors_are_error_results() {
     let result = call(&client, "qiyas_read", json!({"op":"state","args":"{}"})).await;
     assert_eq!(result.is_error, Some(true));
     assert_eq!(
-        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["message"],
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["outcome"]["data"]["message"],
         "No drawing is open"
     );
     assert_eq!(
-        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["code"],
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["outcome"]["data"]["code"],
         "no_drawing"
     );
     // The file tools need the app behind them; without it they say what to do instead.
@@ -316,11 +316,11 @@ async fn tool_errors_are_error_results() {
     .await;
     assert_eq!(result.is_error, Some(true));
     assert_eq!(
-        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["message"],
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["outcome"]["data"]["message"],
         qiyas_ai::host::NO_HOST
     );
     assert_eq!(
-        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["code"],
+        serde_json::from_str::<Value>(text(&result, 0)).unwrap()["outcome"]["data"]["code"],
         "needs_host"
     );
 }
@@ -409,7 +409,47 @@ async fn execute_request_ids_replay_without_another_mutation_or_ui_event() {
     let error = call(&client, "qiyas_execute", changed).await;
     assert_eq!(error.is_error, Some(true));
     assert_eq!(
-        serde_json::from_str::<Value>(text(&error, 0)).unwrap()["code"],
+        serde_json::from_str::<Value>(text(&error, 0)).unwrap()["outcome"]["data"]["code"],
         "request_id_reused"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn evidence_aliases_and_missing_paths_are_successful_mcp_results() {
+    let server = start(false).await;
+    let client = connect(server.addr, TOKEN).await.unwrap();
+    let result = call(
+        &client,
+        "qiyas_read",
+        json!({"op":"commands","args":{"name":"measurement.set_method","full":true}}),
+    )
+    .await;
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    let saved: Value = serde_json::from_str(text(&result, 0)).unwrap();
+    assert_eq!(saved["type"], "result");
+    let id = saved["artifact"].as_str().unwrap();
+    for pointer in ["/documentation", "/method_example", "/"] {
+        let result = call(
+            &client,
+            "qiyas_read",
+            json!({"op":"artifact","args":{"id":id,"pointer":pointer}}),
+        )
+        .await;
+        assert_ne!(result.is_error, Some(true), "{pointer}: {result:?}");
+        let wire: Value = serde_json::from_str(text(&result, 0)).unwrap();
+        assert_eq!(wire["type"], "result");
+        let page = &wire["outcome"]["data"];
+        if pointer == "/method_example" {
+            assert_eq!(page["found"], false);
+            assert!(page["available"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("doc")));
+            assert!(page["did_you_mean"].is_array());
+        } else {
+            assert_eq!(page["found"], true);
+            assert!(page["data"].as_str().unwrap().len() <= 12_000);
+        }
+    }
+    client.cancel().await.unwrap();
 }

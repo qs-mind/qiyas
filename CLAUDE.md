@@ -3537,6 +3537,24 @@ New untitled drawings skip placeholder names already present in chat history or 
   and `fields`; record reads retain their existing row pagination and field semantics.
   Explicit full record reads use field projection to recover arrays beyond the native
   display cap, preserving complete geometry in their artifacts.
+- Mizan and MCP share one result envelope, including errors and capture captions:
+  `{type:"result"|"error", outcome:{type, data}, advice:[], warnings:[], defaults_used:[], revision}`.
+  `outcome.type` names the core outcome or surface operation; its payload is always at
+  `/outcome/data`. Core `result`, `report`, `groups` and `page` wrappers become `data`.
+  Core edit bookkeeping (handles, counts, checks, status) retains its top-level address when
+  present; payload-specific warnings remain with their payload. `artifact` is a top-level id.
+  Full saved results use this envelope too, before display shortening. Compact contracts,
+  small reads, file/host/window results and image captions follow it; native Rust results,
+  window events and atomic batch step bindings keep their existing contracts.
+- Evidence pointers try the exact path first, then only known aliases: result/report/groups/data,
+  optional outcome/page wrappers (including page/records), errors/warnings,
+  summary/confidence_summary, counts/totals and documentation/doc. Empty pointers and `/`
+  stream the whole artifact with the ordinary UTF-8 byte limit and `next_offset`.
+  A missing path succeeds with `{found:false, available:[keys], did_you_mean:[pointers],
+  deepest_pointer}` in `outcome.data`; no data is invented for absent fields such as
+  `method_example`. Successful selections report `found:true` and `resolved_pointer`.
+  Existing conversations and immutable artifacts are not rewritten; the same resolver reads
+  both shapes. Invalid artifact ids, unreadable files and invalid byte offsets remain errors.
 - Full evidence is immutable JSON in the Qiyas data home's `artifacts` directory, named by
   SHA-256 of canonical JSON. `qiyas_read artifact {id, offset}` returns at most 12,000 UTF-8
   bytes with `next_offset`, `artifact_revision`, historical `revision` and `current_revision`.

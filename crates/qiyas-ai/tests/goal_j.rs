@@ -190,7 +190,7 @@ async fn draw_log_replay_applies_rebuilds_and_reports_cheaper_edits() {
                             }
                             advice
                                 .extend(value["advice"].as_array().into_iter().flatten().cloned());
-                            if let Some(rows) = value["records"].as_array() {
+                            if let Some(rows) = value["outcome"]["data"]["records"].as_array() {
                                 let now: std::collections::BTreeSet<_> = rows
                                     .iter()
                                     .filter_map(|r| qiyas_core::registry::handle_number(&r["key"]))
@@ -212,7 +212,9 @@ async fn draw_log_replay_applies_rebuilds_and_reports_cheaper_edits() {
         std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(path).join("scripted-churn.json"),serde_json::to_vec_pretty(&json!({"turn_total":churn.iter().filter_map(|v|v["total"].as_u64()).sum::<u64>(),"calls":churn})).unwrap()).unwrap();
     }
     assert!(
-        errors.iter().all(|e| e["code"] != "repeated_rebuild"),
+        errors
+            .iter()
+            .all(|e| e["outcome"]["data"]["code"] != "repeated_rebuild"),
         "{errors:?}"
     );
     let guard = session.lock().unwrap();

@@ -37,7 +37,7 @@ async fn recorded_clinic_opening_succeeds_on_the_second_attempt() {
     fn retry(request: &qiyas_ai::TurnRequest) -> (&'static str, Value) {
         let results = tool_values(request);
         let error = results.last().unwrap();
-        let at: f64 = error["message"]
+        let at: f64 = error["outcome"]["data"]["message"]
             .as_str()
             .unwrap()
             .split("nearest valid `at`: ")
@@ -360,13 +360,13 @@ async fn clinic_corner_and_partial_revision_intents_need_only_one_advised_retry(
         let results = tool_values(request);
         let wall = results
             .iter()
-            .find(|v| v["outcome"]["centrelines"].is_array())
+            .find(|v| v["outcome"]["data"]["centrelines"].is_array())
             .unwrap();
         (
             surface::EXECUTE,
             input(
                 "run",
-                json!({"command":{"type":"add_wall_openings","centreline":wall["outcome"]["centrelines"][0],"openings":[{"at":5,"width":0.9,"kind":"door"}]}}),
+                json!({"command":{"type":"add_wall_openings","centreline":wall["outcome"]["data"]["centrelines"][0],"openings":[{"at":5,"width":0.9,"kind":"door"}]}}),
             ),
         )
     }
@@ -374,10 +374,10 @@ async fn clinic_corner_and_partial_revision_intents_need_only_one_advised_retry(
         let results = tool_values(request);
         let wall = results
             .iter()
-            .find(|v| v["outcome"]["centrelines"].is_array())
+            .find(|v| v["outcome"]["data"]["centrelines"].is_array())
             .unwrap();
         let error = results.last().unwrap();
-        let at: f64 = error["message"]
+        let at: f64 = error["outcome"]["data"]["message"]
             .as_str()
             .unwrap()
             .split("nearest valid `at`: ")
@@ -392,7 +392,7 @@ async fn clinic_corner_and_partial_revision_intents_need_only_one_advised_retry(
             surface::EXECUTE,
             input(
                 "run",
-                json!({"command":{"type":"add_wall_openings","centreline":wall["outcome"]["centrelines"][0],"openings":[{"at":at,"width":0.9,"kind":"door"}]},"expected_revision":{"geometry_revision":wall["revision"]["geometry_revision"]}}),
+                json!({"command":{"type":"add_wall_openings","centreline":wall["outcome"]["data"]["centrelines"][0],"openings":[{"at":at,"width":0.9,"kind":"door"}]},"expected_revision":{"geometry_revision":wall["revision"]["geometry_revision"]}}),
             ),
         )
     }
@@ -604,7 +604,7 @@ async fn stale_plan_unmet_brief_and_blind_state_reach_statuses_and_resume() {
     let observed = tool_values(requests.lock().unwrap().last().unwrap());
     assert!(observed
         .iter()
-        .any(|v| v["image_input"]["supported"] == false));
+        .any(|v| v["outcome"]["data"]["image_input"]["supported"] == false));
     let snapshot = agent.snapshot();
     let mut resumed = qiyas_ai::Agent::resume(
         snapshot,

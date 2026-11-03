@@ -76,10 +76,10 @@ fn base_contract(tool: &str, op: &str) -> (Value, Value) {
         (READ, "brief_check") => crate::brief_check::contract(),
         (READ, "artifact") => (
             object(
-                json!({"id":string,"offset":{"type":"integer","minimum":0},"pointer":{"type":"string","description":"JSON pointer to one part of the evidence, e.g. /outcome/result/items/3; paged like the whole"}}),
+                json!({"id":string,"offset":{"type":"integer","minimum":0},"pointer":{"type":"string","description":"JSON pointer, e.g. /outcome/data/items/3; / reads the whole, paged. Legacy wrappers and known aliases work. Missing paths return found:false, available and did_you_mean, not an error."}}),
                 &["id"],
             ),
-            json!({"id":"artifact id from a result","pointer":"/items/0"}),
+            json!({"id":"artifact id from a result","pointer":"/outcome/data/items/0"}),
         ),
         (READ, "explain") => (
             object(json!({"item":string,"project":string}), &["item"]),

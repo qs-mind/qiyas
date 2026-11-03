@@ -69,6 +69,21 @@ pub fn code(message: &str) -> &'static str {
 
 pub fn json_error(message: &str) -> Value {
     if let Ok(value) = serde_json::from_str::<Value>(message) {
+        if crate::result_envelope::is_envelope(&value) && value["type"] == "error" {
+            let mut data = value["outcome"]["data"].clone();
+            for field in [
+                "revision",
+                "warnings",
+                "advice",
+                "defaults_used",
+                "artifact",
+            ] {
+                if let Some(metadata) = value.get(field) {
+                    data[field] = metadata.clone();
+                }
+            }
+            return data;
+        }
         if value["code"].is_string() && value["message"].is_string() {
             return value;
         }

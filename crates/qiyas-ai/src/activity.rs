@@ -31,6 +31,9 @@ pub fn describe(name: &str, input: &Value) -> Activity {
 
 /// Called before the result goes to the window; never reads a model's English summary.
 pub fn refine(name: &str, input: &Value, result: &Value) -> Activity {
+    if crate::result_envelope::is_envelope(result) {
+        return refine(name, input, &presentation(result));
+    }
     let mut activity = classify(name, input);
     activity.detail = detail(name, input, result, &activity);
     if let Some(detail) = &mut activity.detail {
@@ -123,7 +126,31 @@ fn first<'a>(values: &[&'a Value]) -> &'a Value {
         .unwrap_or(&Value::Null)
 }
 
+// The window also restores old transcripts with their original result fields.
+fn presentation(value: &Value) -> Value {
+    let mut out = value.clone();
+    let object = out.as_object_mut().expect("result envelope");
+    object.remove("type");
+    let mut outcome = value["outcome"].clone();
+    let data = outcome.as_object_mut().unwrap().remove("data").unwrap();
+    if let Some(fields) = data.as_object() {
+        for (key, value) in fields {
+            object.entry(key.clone()).or_insert_with(|| value.clone());
+            outcome
+                .as_object_mut()
+                .unwrap()
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    object.insert("outcome".into(), outcome);
+    out
+}
+
 fn outcome(result: &Value) -> &Value {
+    if crate::result_envelope::is_envelope(result) {
+        return &result["outcome"]["data"];
+    }
     result
         .get("outcome")
         .filter(|v| v.is_object())
@@ -645,6 +672,9 @@ fn batch_detail(args: &Value, result: &Value, activity: &Activity) -> Detail {
 
 /// Counts are data, never extracted from English summaries or guessed from a command name.
 pub fn count(value: &Value) -> Option<u64> {
+    if crate::result_envelope::is_envelope(value) {
+        return count(&presentation(value));
+    }
     let out = outcome(value);
     ["total", "added_count", "changed_count"]
         .into_iter()
@@ -656,6 +686,30 @@ pub fn count(value: &Value) -> Option<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn restored_result_envelopes_keep_the_same_activity_as_legacy_results() {
+        for (op, args, value) in [
+            (
+                "records",
+                serde_json::json!({"collection":"entities"}),
+                serde_json::json!({"total":30,"records":[]}),
+            ),
+            (
+                "run",
+                serde_json::json!({"command":{"type":"walls"}}),
+                serde_json::json!({"outcome":{"type":"walls","handles":[1,2,3]}}),
+            ),
+        ] {
+            let input = serde_json::json!({"op":op,"args":args});
+            let wire = crate::result_envelope::wrap(op, value.clone());
+            assert_eq!(
+                refine(crate::surface::READ, &input, &value),
+                refine(crate::surface::READ, &input, &wire)
+            );
+            assert_eq!(count(&value), count(&wire));
+        }
+    }
 
     #[test]
     fn commands_use_registry_metadata_including_reads() {

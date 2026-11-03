@@ -494,8 +494,8 @@ async fn invalid_tool_json_is_answered_with_an_error_and_not_run() {
         assert_eq!(result["is_error"], true);
         let error: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(error["message"], "invalid JSON input");
-        assert_eq!(error["code"], "invalid_value");
+        assert_eq!(error["outcome"]["data"]["message"], "invalid JSON input");
+        assert_eq!(error["outcome"]["data"]["code"], "invalid_value");
         // The broken input goes back as an empty object, so the history stays valid.
         assert_eq!(body["messages"][1]["content"][0]["input"], json!({}));
     })
@@ -1349,13 +1349,13 @@ async fn view_image_stops_when_the_image_budget_is_used() {
         assert_eq!(results[0]["content"][1]["type"], "image");
         let unchanged: Value =
             serde_json::from_str(results[1]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(unchanged["status"], "unchanged");
+        assert_eq!(unchanged["outcome"]["data"]["status"], "unchanged");
         assert_eq!(results[2]["is_error"], true);
         let error: Value =
             serde_json::from_str(results[2]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(error["code"], "budget");
+        assert_eq!(error["outcome"]["data"]["code"], "budget");
         assert_eq!(
-            error["message"],
+            error["outcome"]["data"]["message"],
             "Image budget for this conversation is used up; start a new conversation to look again"
         );
 
@@ -1959,7 +1959,7 @@ async fn identical_pictures_keep_the_prefix_and_do_not_resend_images() {
         let messages = body["messages"].as_array().unwrap();
         let newest = &messages[messages.len() - 1]["content"][0]["content"];
         let value: Value = serde_json::from_str(newest[0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(value["status"], "unchanged");
+        assert_eq!(value["outcome"]["data"]["status"], "unchanged");
         assert_eq!(newest.as_array().unwrap().len(),1);
         for pair in requests.windows(2) {
             let before=serialised(&pair[0].body);

@@ -134,7 +134,7 @@ fn remembered_outcome(request: &TurnRequest, command: &str) -> Value {
                     }
                 } else if let Ok(value) = serde_json::from_str::<Value>(text) {
                     if value["command"] == command {
-                        return value["outcome"].clone();
+                        return value["outcome"]["data"].clone();
                     }
                 }
             }
@@ -252,19 +252,24 @@ fn near(value: &Value, expected: f64) {
 fn checks_and_verification(results: &[Value], checks: usize) {
     let reports: Vec<_> = results
         .iter()
-        .filter(|v| v.get("findings").is_some())
+        .filter(|v| v["outcome"]["data"].get("findings").is_some())
         .collect();
     assert_eq!(reports.len(), checks);
     for report in reports {
-        assert_eq!(report["errors"], 0, "{report:#}");
-        println!("{}: {}", report["sheet"], report["line"]);
+        assert_eq!(report["outcome"]["data"]["errors"], 0, "{report:#}");
+        println!(
+            "{}: {}",
+            report["outcome"]["data"]["sheet"], report["outcome"]["data"]["line"]
+        );
     }
     let verified: Vec<_> = results
         .iter()
         .filter(|v| v["outcome"]["type"] == "verified")
         .collect();
     assert_eq!(verified.len(), 1);
-    let expectations = verified[0]["outcome"]["results"].as_array().unwrap();
+    let expectations = verified[0]["outcome"]["data"]["results"]
+        .as_array()
+        .unwrap();
     assert!(expectations.len() >= 6);
     for expectation in expectations {
         assert_eq!(expectation["passed"], true, "{expectation:#}");
@@ -378,19 +383,25 @@ async fn terminal_ground_floor_through_mizans_three_tools() {
     .await;
     checks_and_verification(&eval.results, 2);
     assert_eq!(eval.pictures, 2);
-    assert_eq!(eval.results[0]["entities_on_sheet"], 0);
-    near(&eval.results[0]["metres_per_unit"], 1.0);
-    assert_eq!(eval.results.last().unwrap()["annotation_scale"], "1:250");
+    assert_eq!(eval.results[0]["outcome"]["data"]["entities_on_sheet"], 0);
+    near(&eval.results[0]["outcome"]["data"]["metres_per_unit"], 1.0);
+    assert_eq!(
+        eval.results.last().unwrap()["outcome"]["data"]["annotation_scale"],
+        "1:250"
+    );
     let layers_batch = command_result(&eval.results, "batch");
     assert_eq!(
-        layers_batch["outcome"]["steps"].as_array().unwrap().len(),
+        layers_batch["outcome"]["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .len(),
         6
     );
     assert_eq!(layers_batch["step"]["source"], "ai");
     for layer in LAYERS {
         assert!(eval.session.drawing.doc.layers.contains(layer));
     }
-    let wall = command_result(&eval.results, "walls")["outcome"].clone();
+    let wall = command_result(&eval.results, "walls")["outcome"]["data"].clone();
     // Gross = 120.2*100.2 - 4*(59.8*49.8); net removes .2*(5*.9 + 3*1.2).
     // Volume keeps lintels/sills: 131.88*3 - .2*(5*.9*2.1 + 3*1.2*1.2).
     near(&wall["centreline_length"], 660.0);
@@ -407,12 +418,16 @@ async fn terminal_ground_floor_through_mizans_three_tools() {
     let room_reports: Vec<_> = eval
         .results
         .iter()
-        .filter(|v| v.get("rooms").is_some())
+        .filter(|v| v["outcome"]["data"].get("rooms").is_some())
         .collect();
     assert_eq!(room_reports.len(), 2);
     for report in &room_reports {
-        assert_eq!(report["skipped"], json!([]), "{report:#}");
-        let rooms = report["rooms"].as_array().unwrap();
+        assert_eq!(
+            report["outcome"]["data"]["skipped"],
+            json!([]),
+            "{report:#}"
+        );
+        let rooms = report["outcome"]["data"]["rooms"].as_array().unwrap();
         assert_eq!(rooms.len(), 4, "{report:#}");
         assert_eq!(
             rooms
@@ -431,7 +446,10 @@ async fn terminal_ground_floor_through_mizans_three_tools() {
         }
     }
     let mut after_grid = (*room_reports[1]).clone();
-    for room in after_grid["rooms"].as_array_mut().unwrap() {
+    for room in after_grid["outcome"]["data"]["rooms"]
+        .as_array_mut()
+        .unwrap()
+    {
         // LabelSpaces adds persistent links between these reads; geometry must still agree.
         let boundary = room
             .as_object_mut()
@@ -454,8 +472,8 @@ async fn terminal_ground_floor_through_mizans_three_tools() {
         "grid must not close or subdivide rooms"
     );
     let labels = command_result(&eval.results, "label_spaces");
-    assert_eq!(labels["outcome"]["report"]["labels_written"], 4);
-    let rooms = labels["outcome"]["report"]["rooms"].as_array().unwrap();
+    assert_eq!(labels["outcome"]["data"]["labels_written"], 4);
+    let rooms = labels["outcome"]["data"]["rooms"].as_array().unwrap();
     let label_handles: Vec<_> = rooms
         .iter()
         .map(|room| room["label_handle"].clone())
@@ -562,8 +580,8 @@ async fn terminal_ground_floor_through_mizans_three_tools() {
 fn flange_verify(request: &TurnRequest) -> (&'static str, Value) {
     let results = json_results(&request.messages);
     let batch = command_result(&results, "batch");
-    let outer = batch["outcome"]["steps"][0]["added"][0].clone();
-    let inner = batch["outcome"]["steps"][1]["added"][0].clone();
+    let outer = batch["outcome"]["data"]["steps"][0]["added"][0].clone();
+    let inner = batch["outcome"]["data"]["steps"][1]["added"][0].clone();
     (
         READ,
         input(
@@ -617,23 +635,34 @@ async fn a_flange_uses_the_same_surface_without_building_rules() {
     for (index, layer) in [(0, "PART"), (1, "PART"), (2, "CENTER")] {
         on_layer(
             &eval.session,
-            &batch["outcome"]["steps"][index]["added"],
+            &batch["outcome"]["data"]["steps"][index]["added"],
             layer,
         );
     }
     on_layer(
         &eval.session,
-        &batch["outcome"]["steps"][5]["outcome"]["handles"],
+        &batch["outcome"]["data"]["steps"][5]["outcome"]["handles"],
         "DIMS",
     );
     for entity in eval.session.drawing.doc.entities_in_block(MODEL) {
         assert_ne!(entity.common().layer, "0");
     }
-    for report in eval.results.iter().filter(|v| v.get("findings").is_some()) {
+    for report in eval
+        .results
+        .iter()
+        .filter(|v| v["outcome"]["data"].get("findings").is_some())
+    {
         assert!(
-            report["counts"].get("missing_center_mark").is_none(),
+            report["outcome"]["data"]["counts"]
+                .get("missing_center_mark")
+                .is_none(),
             "{report:#}"
         );
-        assert!(report["counts"].get("room_open").is_none(), "{report:#}");
+        assert!(
+            report["outcome"]["data"]["counts"]
+                .get("room_open")
+                .is_none(),
+            "{report:#}"
+        );
     }
 }

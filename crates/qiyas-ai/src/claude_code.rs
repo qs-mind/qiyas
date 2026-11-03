@@ -1113,7 +1113,7 @@ impl Events {
                                 .join("\n")
                         });
                     let data: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-                    if let Some(plan) = data.get("plan") {
+                    if let Some(plan) = crate::artifact::resolve(&data, "/plan").value {
                         if let Ok(plan) =
                             serde_json::from_value::<crate::surface::Plan>(plan.clone())
                         {

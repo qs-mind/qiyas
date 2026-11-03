@@ -58,7 +58,7 @@ fn history(request: &TurnRequest) -> Vec<Value> {
                     ResultPart::Png(_) => None,
                 })?;
                 if *is_error {
-                    let message = result["message"].as_str().unwrap_or("");
+                    let message = result["outcome"]["data"]["message"].as_str().unwrap_or("");
                     assert!(
                         message.contains("junction") && message.contains("fits"),
                         "{result:#}"
@@ -79,7 +79,7 @@ fn latest_groups(request: &TurnRequest) -> Value {
         .into_iter()
         .rev()
         .find(|v| v["outcome"]["type"] == "wall_groups")
-        .expect("wall read before placing an opening")["outcome"]["groups"]
+        .expect("wall read before placing an opening")["outcome"]["data"]
         .clone()
 }
 
@@ -365,18 +365,30 @@ async fn terminal_in_phases_joins_walls_and_recovers_using_the_wall_read() {
     observed_request.messages = observed;
     let results = history(&observed_request);
     checks_and_verification(&results, 5);
-    for report in results.iter().filter(|v| v.get("findings").is_some()) {
-        assert_eq!(report["warnings"], 0, "{report:#}");
+    for report in results
+        .iter()
+        .filter(|v| v["outcome"]["data"].get("findings").is_some())
+    {
+        assert_eq!(report["outcome"]["data"]["warnings"], 0, "{report:#}");
     }
-    let snapshots: Vec<_> = results.iter().filter_map(|v| v.get("plan")).collect();
+    let snapshots: Vec<_> = results
+        .iter()
+        .filter_map(|v| v["outcome"]["data"].get("plan"))
+        .collect();
     assert_eq!(
         snapshots.len(),
         plans.len(),
         "all plan snapshots were observed before history trimming"
     );
-    let rooms = results.iter().find(|v| v.get("rooms").is_some()).unwrap();
-    assert_eq!(rooms["rooms"].as_array().unwrap().len(), 4);
-    assert_eq!(rooms["skipped"], json!([]));
+    let rooms = results
+        .iter()
+        .find(|v| v["outcome"]["data"].get("rooms").is_some())
+        .unwrap();
+    assert_eq!(
+        rooms["outcome"]["data"]["rooms"].as_array().unwrap().len(),
+        4
+    );
+    assert_eq!(rooms["outcome"]["data"]["skipped"], json!([]));
     let reads: Vec<_> = results
         .iter()
         .filter(|v| v["outcome"]["type"] == "wall_groups")
@@ -385,7 +397,7 @@ async fn terminal_in_phases_joins_walls_and_recovers_using_the_wall_read() {
         reads[0], reads[1],
         "a refused opening changes no wall handle or definition"
     );
-    let final_runs = &reads.last().unwrap()["outcome"]["groups"][0]["runs"];
+    let final_runs = &reads.last().unwrap()["outcome"]["data"][0]["runs"];
     let window_at = final_runs[0]["openings"][0]["at"].as_f64().unwrap();
     let mut reference = Session::new_blank(&dir.path().join("one-command.dwg"), 6);
     let expected = surface_command(
@@ -400,7 +412,7 @@ async fn terminal_in_phases_joins_walls_and_recovers_using_the_wall_read() {
         .iter()
         .rev()
         .find(|v| v["command"] == "add_wall_openings")
-        .unwrap()["outcome"];
+        .unwrap()["outcome"]["data"];
     // Outer ring: 120.25*100.25 - 119.75*99.75 = 110 m². Partitions: .15*(99.75+119.75)-.15².
     // Openings remove .25*1.2 + .15*.9; void heights are 1.2 m and 2.1 m respectively.
     near(&actual["gross_area"], 142.9025);

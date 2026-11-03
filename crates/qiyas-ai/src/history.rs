@@ -223,7 +223,15 @@ fn trim_with_save(
                         artifact =
                             artifact.or_else(|| value["artifact"].as_str().map(str::to_owned));
                         for field in ["message", "error", "errors", "code"] {
-                            if let Some(v) = value.get(field).filter(|v| !v.is_null()) {
+                            if let Some(v) = value
+                                .get(field)
+                                .or_else(|| {
+                                    crate::result_envelope::is_envelope(&value)
+                                        .then(|| value["outcome"]["data"].get(field))
+                                        .flatten()
+                                })
+                                .filter(|v| !v.is_null())
+                            {
                                 errors.push(v.clone());
                             }
                         }
@@ -244,7 +252,13 @@ fn trim_with_save(
                     _ => part.clone(),
                 })
                 .collect();
-            let original = json!({"call_id":tool_use_id,"operation":calls.get(tool_use_id),"content":evidence,"is_error":is_error});
+            let original = match evidence.as_slice() {
+                [ResultPart::Text(text)] => serde_json::from_str::<Value>(text)
+                    .ok()
+                    .filter(crate::result_envelope::is_envelope),
+                _ => None,
+            }
+            .unwrap_or_else(|| json!({"call_id":tool_use_id,"operation":calls.get(tool_use_id),"content":evidence,"is_error":is_error}));
             let evidence_id = artifact.unwrap_or_else(|| {
                 crate::artifact::hash(crate::artifact::canonical(&original).to_string().as_bytes())
             });
@@ -454,6 +468,14 @@ fn contract_reference(text: &str) -> String {
         return text.to_owned();
     };
     fn names(value: &Value, out: &mut Vec<Value>) {
+        if crate::result_envelope::is_envelope(value) {
+            let mut data = value["outcome"]["data"].clone();
+            if data.is_object() && value["artifact"].is_string() {
+                data["artifact"] = value["artifact"].clone();
+            }
+            names(&data, out);
+            return;
+        }
         if value["name"].is_string() {
             out.push(json!({"name":value["name"],"version":value["version"],"artifact":value["artifact"]}));
         }

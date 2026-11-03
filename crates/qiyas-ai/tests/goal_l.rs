@@ -30,7 +30,9 @@ fn bind_villa_readback(request: &qiyas_ai::TurnRequest, input: &mut Value) {
             ResultPart::Text(text) => serde_json::from_str::<Value>(text).ok(),
             _ => None,
         })
-        .find_map(|value| value["outcome"].get("groups").cloned())
+        .find_map(|value| {
+            (value["outcome"]["type"] == "wall_groups").then(|| value["outcome"]["data"].clone())
+        })
         .unwrap_or(json!([]));
     villa::bind_openings(input, &groups, 1.0);
 }
@@ -120,12 +122,14 @@ async fn villa_replay_finishes_with_all_openings_and_visible_findings() {
         "the logged overlapping retries still fail"
     );
     assert!(
-        errors
-            .iter()
-            .all(|e| e["message"].as_str().is_some_and(|m| m.contains("fit")
-                && (m.contains("overlap")
-                    || m.contains("junction")
-                    || m.contains("does not fit")))),
+        errors.iter().all(
+            |e| e["outcome"]["data"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("fit")
+                    && (m.contains("overlap")
+                        || m.contains("junction")
+                        || m.contains("does not fit")))
+        ),
         "{errors:?}"
     );
     let guard = session.lock().unwrap();

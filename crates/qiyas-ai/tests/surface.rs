@@ -1036,7 +1036,7 @@ async fn plan_events_follow_valid_snapshots_and_the_provider_observes_them_witho
     let saved: Vec<_> = history
         .into_iter()
         .filter(|(error, _)| !error)
-        .map(|(_, result)| result["plan"].clone())
+        .map(|(_, result)| result["outcome"]["data"]["plan"].clone())
         .collect();
     assert_eq!(saved, [pending, active, done]);
 }
@@ -1323,9 +1323,9 @@ async fn mizan_reads_commands_and_validates_before_a_drawing_is_open() {
     ]).await;
     let outputs = results(&agent);
     assert!(!outputs[0].0, "{:?}", outputs[0]);
-    assert!(outputs[0].1["index"].is_string());
-    assert_eq!(outputs[1].1["valid"], true);
-    assert_eq!(outputs[2].1["code"], "no_drawing");
+    assert!(outputs[0].1["outcome"]["data"]["index"].is_string());
+    assert_eq!(outputs[1].1["outcome"]["data"]["valid"], true);
+    assert_eq!(outputs[2].1["outcome"]["data"]["code"], "no_drawing");
     assert!(events
         .iter()
         .any(|event| matches!(event, AgentEvent::ToolResult { is_error: true, .. })));
@@ -2443,6 +2443,7 @@ async fn scripted_named_takeoff_writes_cited_rules_and_retains_method_on_every_q
                     content.iter().find_map(|part| match part {
                         ResultPart::Text(text) => serde_json::from_str::<Value>(text)
                             .ok()
+                            .map(|v| v["outcome"]["data"].clone())
                             .filter(|v| v["phases"].is_object()),
                         _ => None,
                     })
@@ -2683,11 +2684,10 @@ async fn identical_failed_edits_refuse_only_the_call_and_continue_the_turn() {
         }
         assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
         if attempts == 6 {
-            assert!(results
-                .iter()
-                .any(|(_, v)| v["code"] == "repeated_failing_call"
-                    && v["failed_attempts"] == 5
-                    && !v["previous_error"].is_null()));
+            assert!(results.iter().any(|(_, v)| v["outcome"]["data"]["code"]
+                == "repeated_failing_call"
+                && v["outcome"]["data"]["failed_attempts"] == 5
+                && !v["outcome"]["data"]["previous_error"].is_null()));
             assert_eq!(requests.lock().unwrap().len(), 8);
         }
     }

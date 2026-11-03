@@ -1679,7 +1679,7 @@ impl Agent {
                     for part in content {
                         if let ResultPart::Text(text) = part {
                             if let Ok(mut value) = serde_json::from_str::<Value>(text) {
-                                if value.get("revision").is_none() {
+                                if value["revision"].is_null() {
                                     value["revision"] = revision.clone();
                                     *text = value.to_string();
                                 }
@@ -2253,7 +2253,10 @@ impl Agent {
                 };
                 let block = ContentBlock::ToolResult {
                     tool_use_id: id.to_string(),
-                    content: vec![ResultPart::Text(caption), ResultPart::Png(data)],
+                    content: vec![
+                        ResultPart::Text(crate::result_envelope::image(&caption).to_string()),
+                        ResultPart::Png(data),
+                    ],
                     is_error: false,
                 };
                 (block, event)
@@ -2877,7 +2880,13 @@ fn tool_result_value(block: &ContentBlock) -> Value {
     if let ContentBlock::ToolResult { content, .. } = block {
         for part in content {
             if let ResultPart::Text(text) = part {
-                return serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()));
+                let value: Value =
+                    serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()));
+                return if value["type"] == "error" {
+                    crate::errors::json_error(text)
+                } else {
+                    value
+                };
             }
         }
     }
@@ -2895,7 +2904,7 @@ fn json_result(id: &str, value: &Value) -> (ContentBlock, AgentEvent) {
         ui: value.get("ui").cloned(),
         is_error: false,
     };
-    let mut wire = value.clone();
+    let mut wire = crate::result_envelope::wrap("result", value.clone());
     if let Some(object) = wire.as_object_mut() {
         object.remove("ui");
     }
@@ -3199,6 +3208,9 @@ fn error_event(id: &str, why: &str) -> AgentEvent {
 
 /// One line about a tool's JSON result.
 fn summary(value: &Value) -> String {
+    if crate::result_envelope::is_envelope(value) && value.get("written").is_none() {
+        return summary(&value["outcome"]["data"]);
+    }
     if let Some(files) = crate::output_files::summary(value) {
         return files;
     }
@@ -3229,6 +3241,9 @@ fn summary(value: &Value) -> String {
 
 /// The entity handles a result is about: a measurement's, or a zoom's.
 fn handles(value: &Value) -> Vec<u64> {
+    if crate::result_envelope::is_envelope(value) && value.get("ui").is_none() {
+        return handles(&value["outcome"]["data"]);
+    }
     let list = if value["measurement"]["handles"].is_array() {
         &value["measurement"]["handles"]
     } else if value["outcome"]["measurement"]["handles"].is_array() {

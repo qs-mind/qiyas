@@ -276,19 +276,21 @@ fn redact_scoped(
 /// Lossless JSON pages. The reader concatenates `json` chunks, or reads a JSON pointer
 /// from the cached original. Counts and source paging metadata remain intact in the envelope.
 fn evidence_page(value: &Value, id: usize, offset: usize, pointer: &str) -> Result<String, String> {
-    let selected = if pointer.is_empty() {
-        value
-    } else {
-        value
-            .pointer(pointer)
-            .ok_or("Evidence pointer not found. / مسار الدليل غير موجود.")?
+    let resolved = crate::artifact::resolve(value, pointer);
+    let Some(selected) = resolved.value else {
+        return Ok(
+            crate::result_envelope::wrap("evidence_page", resolved.missing(pointer)).to_string(),
+        );
     };
     let serialized = selected.to_string();
     if offset > serialized.len() || !serialized.is_char_boundary(offset) {
         return Err("Invalid evidence offset. / إزاحة الدليل غير صالحة.".into());
     }
     if offset == 0 && serialized.len() <= RESULT_LIMIT {
-        let page = json!({"evidence_id":id,"data":selected,"truncated":false,"next_offset":null});
+        let page = crate::result_envelope::wrap(
+            "evidence_page",
+            json!({"evidence_id":id,"data":selected,"truncated":false,"next_offset":null}),
+        );
         if page.to_string().len() <= RESULT_LIMIT {
             return Ok(page.to_string());
         }
@@ -298,10 +300,10 @@ fn evidence_page(value: &Value, id: usize, offset: usize, pointer: &str) -> Resu
         end -= 1;
     }
     loop {
-        let page = json!({"evidence_id":id,"encoding":"json","json":&serialized[offset..end],
-            "total_bytes":serialized.len(),"total":value.get("total"),
-            "source_next_offset":value.get("next_offset"),"offset":offset,
-            "truncated":end < serialized.len(),"next_offset":(end < serialized.len()).then_some(end)}).to_string();
+        let page = crate::result_envelope::wrap("evidence_page", json!({"evidence_id":id,"encoding":"json","json":&serialized[offset..end],
+            "total_bytes":serialized.len(),"total":crate::artifact::resolve(value, "/total").value,
+            "source_next_offset":crate::artifact::resolve(value, "/next_offset").value,"offset":offset,
+            "truncated":end < serialized.len(),"next_offset":(end < serialized.len()).then_some(end)})).to_string();
         if page.len() <= RESULT_LIMIT {
             return Ok(page);
         }
@@ -327,7 +329,7 @@ fn reader_tools() -> Vec<crate::ToolSpec> {
         .find(|t| t.name == surface::READ)
         .expect("the read tool");
     read.input_schema["properties"]["op"]["enum"] = json!(ALLOWED_OPS);
-    read.description = "Quantity-blind drawing reads: query, measure, rooms, records (entities or objects with properties), spatial_query (kind/targets/point), commands, record_schema. Evidence pages are lossless: follow evidence_page {id: evidence_id, offset: next_offset, pointer?: JSON pointer} until truncated is false. Concatenate json chunks before parsing. data contains a complete result; follow its own next_offset with the original read.";
+    read.description = "Quantity-blind drawing reads: query, measure, rooms, records (entities or objects with properties), spatial_query (kind/targets/point), commands, record_schema. Evidence pages are lossless: follow evidence_page {id: evidence_id, offset: next_offset, pointer?: JSON pointer} until truncated is false. Concatenate json chunks before parsing. Replies use {type,outcome:{type,data},advice,warnings,defaults_used,revision}. outcome.data contains page metadata and data or json; follow its next_offset. / selects the whole evidence; missing pointers return found:false and available keys.";
     vec![read]
 }
 
@@ -478,7 +480,10 @@ pub async fn read_quantity(
                     Ok(text) => match serde_json::from_str::<Value>(&text) {
                         Ok(value) => {
                             let id = evidence.len();
-                            evidence.push(value);
+                            evidence.push(crate::result_envelope::wrap(
+                                input["op"].as_str().unwrap_or("read"),
+                                value,
+                            ));
                             evidence_page(&evidence[id], id, 0, "")
                         }
                         Err(error) => Err(error.to_string()),
@@ -488,7 +493,11 @@ pub async fn read_quantity(
             };
             let (text, is_error) = match result {
                 Ok(text) => (text, false),
-                Err(why) => (why, true),
+                Err(why) => (
+                    crate::result_envelope::wrap("error", crate::errors::json_error(&why))
+                        .to_string(),
+                    true,
+                ),
             };
             results.push(ContentBlock::ToolResult {
                 tool_use_id: id,
@@ -961,6 +970,7 @@ mod tests {
             let text = evidence_page(&value, 0, offset, "").unwrap();
             assert!(text.len() <= RESULT_LIMIT);
             let page: Value = serde_json::from_str(&text).unwrap();
+            let page = &page["outcome"]["data"];
             assert_eq!(page["total"], 301);
             joined.push_str(page["json"].as_str().unwrap());
             if page["truncated"] == false {

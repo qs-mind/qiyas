@@ -15,6 +15,11 @@ fn paths(value: &Value) -> Vec<&str> {
 }
 
 pub(crate) fn summary(value: &Value) -> Option<String> {
+    let value = if crate::result_envelope::is_envelope(value) && value.get("written").is_none() {
+        &value["outcome"]["data"]
+    } else {
+        value
+    };
     let paths = paths(value);
     (!paths.is_empty()).then(|| json!({ "written": paths }).to_string())
 }
@@ -64,6 +69,8 @@ mod tests {
             let value = json!({"written": written, "data": {"written": "/tower/unrelated.pdf"}});
             let kept: Value = serde_json::from_str(&summary(&value).unwrap()).unwrap();
             assert_eq!(kept["written"], json!(paths(&value)));
+            let wire = crate::result_envelope::wrap("export", value.clone());
+            assert_eq!(summary(&wire), summary(&value));
         }
         for value in [
             json!({"outcome": {"steps": [{"written": "/tower/unrelated.pdf"}]}}),

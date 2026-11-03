@@ -189,7 +189,7 @@ pub(crate) fn run(session: &mut Session, args: &Value, source: Source) -> Result
                         } else {
                             true
                         };
-                        let raw = value.pointer(&read.pointer);
+                        let raw = crate::artifact::resolve(&value, &read.pointer).value;
                         let measured = raw.and_then(|v| match &read.subtract {
                             Some(before) => difference(v, before),
                             None => Some(v.clone()),

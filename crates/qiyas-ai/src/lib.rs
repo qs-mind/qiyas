@@ -36,6 +36,7 @@ pub mod pictures;
 pub mod prompt;
 pub mod provider;
 mod result;
+mod result_envelope;
 mod revision;
 pub mod surface;
 mod surface_io;

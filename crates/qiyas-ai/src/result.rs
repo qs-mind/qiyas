@@ -1,4 +1,4 @@
-//! Compact wire replies. The saved artifact always contains the untouched result.
+//! Compact wire replies. Saved artifacts keep the full payload in the same envelope.
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
@@ -9,6 +9,21 @@ const SAMPLE: usize = 5;
 const SMALL: usize = 2_000;
 
 pub(crate) fn format(
+    tool: &str,
+    op: &str,
+    args: &Value,
+    output: ToolOutput,
+) -> Result<ToolOutput, ToolError> {
+    match format_payload(tool, op, args, output)? {
+        ToolOutput::Json(value) => Ok(ToolOutput::Json(crate::result_envelope::wrap(op, value))),
+        ToolOutput::Image { png, caption } => Ok(ToolOutput::Image {
+            png,
+            caption: crate::result_envelope::image(&caption).to_string(),
+        }),
+    }
+}
+
+fn format_payload(
     tool: &str,
     op: &str,
     args: &Value,
@@ -41,7 +56,7 @@ pub(crate) fn format(
         return Ok(ToolOutput::Json(value));
     }
     // Failure to save evidence must not disguise a committed edit as a failed command.
-    let id = match artifact::save(&value) {
+    let id = match artifact::save(&crate::result_envelope::wrap(op, value.clone())) {
         Ok(id) => id,
         Err(error) => {
             let mut value = value;
@@ -117,15 +132,17 @@ pub(crate) fn format(
             // call answers instead of a refusal and a second call.
             let mut selected = json!({});
             let mut missing = Vec::new();
+            let envelope = crate::result_envelope::wrap(op, value.clone());
             for field in fields.iter().filter_map(Value::as_str) {
+                let pointer = if field.starts_with('/') {
+                    field.to_owned()
+                } else {
+                    format!("/{field}")
+                };
                 let found = value
                     .get(field)
-                    .or_else(|| value.pointer(field))
-                    .or_else(|| {
-                        (!field.starts_with('/'))
-                            .then(|| value.pointer(&format!("/{field}")))
-                            .flatten()
-                    });
+                    .or_else(|| artifact::resolve(&value, &pointer).value)
+                    .or_else(|| artifact::resolve(&envelope, &pointer).value);
                 if let Some(found) = found {
                     selected[field] = if full {
                         found.clone()
@@ -277,8 +294,9 @@ fn shorten(value: &Value) -> Value {
 
 /// Keep repair facts in context and the complete validator evidence in the artifact.
 pub(crate) fn error(value: Value) -> Value {
-    let Ok(id) = artifact::save(&value) else {
-        return value;
+    let full = crate::result_envelope::wrap("error", value.clone());
+    let Ok(id) = artifact::save(&full) else {
+        return full;
     };
     let mut out = summary(&value, 0);
     if let Some(message) = value["message"].as_str() {
@@ -286,7 +304,7 @@ pub(crate) fn error(value: Value) -> Value {
     }
     out["status"] = json!("error");
     out["artifact"] = json!(id);
-    artifact::canonical(&out)
+    artifact::canonical(&crate::result_envelope::wrap("error", out))
 }
 
 fn attach_contract_artifact(value: &mut Value, id: &str) {
@@ -577,6 +595,15 @@ fn compact_contracts(value: &Value) -> Value {
 
 /// Only the new reply changes; previous discovery messages never move or lose their schema.
 pub(crate) fn deduplicate(value: &mut Value, known: &mut BTreeMap<String, Value>) {
+    if crate::result_envelope::is_envelope(value) {
+        let artifact = value["artifact"].clone();
+        let data = &mut value["outcome"]["data"];
+        if artifact.is_string() && data["version"].is_string() {
+            data["artifact"] = artifact;
+        }
+        deduplicate(data, known);
+        return;
+    }
     if crate::command_contract::is_compact(value) {
         return;
     }
@@ -603,6 +630,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_formatter_branch_uses_the_envelope_including_soft_misses_and_captions() {
+        for (tool, op, args, raw) in [
+            (
+                surface::READ,
+                "state",
+                json!({}),
+                json!({"units":"m","revision":7}),
+            ),
+            (
+                surface::READ,
+                "artifact",
+                json!({}),
+                json!({"found":false,"available":["doc"],"did_you_mean":["/doc"],"artifact_revision":4,"revision":4,"current_revision":7}),
+            ),
+            (
+                surface::EXECUTE,
+                "finish",
+                json!({}),
+                json!({"completed":true,"revision":7}),
+            ),
+            (
+                surface::READ,
+                "records",
+                json!({"detail":"full"}),
+                json!({"records":[{"key":42,"data":{"radius":2.5}}],"revision":7}),
+            ),
+        ] {
+            let wire = reply(tool, op, args, raw.clone());
+            assert_eq!(wire["type"], "result");
+            assert_eq!(wire["outcome"]["type"], op);
+            assert_eq!(wire["revision"], raw["revision"]);
+            for field in ["advice", "warnings", "defaults_used"] {
+                assert!(wire[field].is_array(), "{wire}");
+            }
+            if op == "artifact" {
+                assert_eq!(wire["outcome"]["data"]["found"], false);
+                assert_eq!(wire["outcome"]["data"]["current_revision"], 7);
+            }
+        }
+        let ToolOutput::Image { png, caption } = format(
+            surface::CAPTURE,
+            "capture",
+            &json!({}),
+            ToolOutput::Image {
+                png: vec![1, 2, 3],
+                caption: "Tower floor bounds".into(),
+            },
+        )
+        .unwrap() else {
+            panic!("image")
+        };
+        assert_eq!(png, vec![1, 2, 3]);
+        let caption: Value = serde_json::from_str(&caption).unwrap();
+        assert_eq!(caption["outcome"]["data"]["caption"], "Tower floor bounds");
+        let error = error(json!({"code":"not_found","message":"No entity","revision":7}));
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["outcome"]["data"]["code"], "not_found");
+        let page = artifact::read(&json!({"id":error["artifact"],"pointer":"/outcome/data/code"}))
+            .unwrap();
+        assert_eq!(page["data"], "\"not_found\"");
+    }
+
+    #[test]
     fn large_batches_keep_all_room_label_adjustments_inline() {
         let rooms: Vec<_> = (0..50)
             .map(|i| {
@@ -616,7 +706,9 @@ mod tests {
             json!({}),
             json!({"outcomes":[{"report":{"rooms":rooms}}]}),
         );
-        let adjustments = value["label_adjustments"].as_array().unwrap();
+        let adjustments = value["outcome"]["data"]["label_adjustments"]
+            .as_array()
+            .unwrap();
         assert_eq!(adjustments.len(), 50);
         assert_eq!(adjustments[49]["label_handle"], 50);
         assert_eq!(adjustments[49]["placement"], "shrunk_outside");
@@ -647,8 +739,8 @@ mod tests {
             "{}",
             out.to_string().len()
         );
-        assert!(out["shortened"].is_string());
-        assert_eq!(out["next_offset"], 2);
+        assert!(out["outcome"]["data"]["shortened"].is_string());
+        assert_eq!(out["outcome"]["data"]["next_offset"], 2);
         let id = out["artifact"].as_str().unwrap();
         let part = artifact::read(
             &json!({"id":id,"pointer":"/records/0/data/data/items/0/lines/5999/id"}),
@@ -673,7 +765,7 @@ mod tests {
             .collect();
         let evidence = json!({"revision":null,"outcome":{"result":{"items":items,"warnings":[]}}});
         let out = reply(surface::READ, "run", json!({}), evidence);
-        let listed = &out["outcome"]["result"]["items"];
+        let listed = &out["outcome"]["data"]["items"];
         assert_eq!(listed["count"], 115);
         assert_eq!(listed["rows"].as_array().unwrap().len(), ROWS);
         assert_eq!(listed["more"], 115 - ROWS);
@@ -699,14 +791,19 @@ mod tests {
         let draw =
             serde_json::to_value(qiyas_core::registry::registry().get("draw").unwrap()).unwrap();
         let out = reply(surface::READ, "commands", json!({"name":"draw"}), draw);
-        let line = &out["kinds_contract"]["line"];
+        let line = &out["outcome"]["data"]["kinds_contract"]["line"];
         assert_eq!(line["required"], json!(["a", "b"]));
         assert!(line["example"]["a"].is_array());
-        assert!(out["kinds_contract"]["polyline"]["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("points")));
-        assert!(out.get("kinds").is_none() && out.get("schema").is_none());
+        assert!(
+            out["outcome"]["data"]["kinds_contract"]["polyline"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("points"))
+        );
+        assert!(
+            out["outcome"]["data"].get("kinds").is_none()
+                && out["outcome"]["data"].get("schema").is_none()
+        );
         assert!(out.to_string().len() < 9_000, "{}", out.to_string().len());
     }
 
@@ -721,11 +818,20 @@ mod tests {
                 {"key":719,"type":"Line","layer":"A-WALL","length":3.0}]});
         let out = reply(surface::READ, "records", json!({}), value);
         assert!(out.to_string().len() < 16_000, "{}", out.to_string().len());
-        assert_eq!(out["shortened"]["records"], 1);
-        assert!(out["hint"].as_str().unwrap().contains("tables"));
-        assert_eq!(out["records"][0]["data"]["columns"], 4);
-        assert_eq!(out["records"][0]["data"]["rows"]["count"], 500);
-        assert_eq!(out["records"][1]["length"], 3.0, "small records stay whole");
+        assert_eq!(out["outcome"]["data"]["shortened"]["records"], 1);
+        assert!(out["outcome"]["data"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("tables"));
+        assert_eq!(out["outcome"]["data"]["records"][0]["data"]["columns"], 4);
+        assert_eq!(
+            out["outcome"]["data"]["records"][0]["data"]["rows"]["count"],
+            500
+        );
+        assert_eq!(
+            out["outcome"]["data"]["records"][1]["length"], 3.0,
+            "small records stay whole"
+        );
     }
 
     #[test]
@@ -736,12 +842,21 @@ mod tests {
             "advice":[{"code":"check","message":"Check dimensions."},{"code":"check","message":"Check dimensions."}],
             "check":{"counts":{"duplicates":30},"findings":(0..30).map(|i|json!({"rule":"duplicates","handles":[i]})).collect::<Vec<_>>()}});
         let compact = reply(surface::EXECUTE, "batch", json!({}), evidence.clone());
-        assert_eq!(compact["added_count"], 100);
-        assert_eq!(compact["added"].as_array().unwrap().len(), 5);
-        assert_eq!(compact["check"]["findings"][0]["count"], 30);
+        assert_eq!(compact["outcome"]["data"]["added_count"], 100);
+        assert_eq!(
+            compact["outcome"]["data"]["added"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+        assert_eq!(
+            compact["outcome"]["data"]["check"]["findings"][0]["count"],
+            30
+        );
         assert_eq!(compact["advice"].as_array().unwrap().len(), 1);
         assert_eq!(compact["ui"], evidence["ui"]);
-        assert!(compact.get("defaults_used").is_none());
+        assert_eq!(compact["defaults_used"], json!([]));
         assert!(compact.to_string().len() < 2000);
         let mut text = String::new();
         let mut offset = 0;
@@ -754,14 +869,20 @@ mod tests {
                 None => break,
             }
         }
-        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), evidence);
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            crate::result_envelope::wrap("batch", evidence.clone())
+        );
         let full = reply(
             surface::EXECUTE,
             "batch",
             json!({"detail":"full"}),
             evidence.clone(),
         );
-        assert_eq!(full["measurement_report"], evidence["measurement_report"]);
+        assert_eq!(
+            full["outcome"]["data"]["measurement_report"],
+            evidence["measurement_report"]
+        );
     }
 
     #[test]
@@ -825,8 +946,8 @@ mod tests {
             else {
                 panic!("JSON undo")
             };
-            assert_eq!(undone["removed_count"], 1);
-            assert_eq!(undone["removed"], json!([handle]));
+            assert_eq!(undone["outcome"]["data"]["removed_count"], 1);
+            assert_eq!(undone["outcome"]["data"]["removed"], json!([handle]));
             assert!(session.entity_info(handle.as_u64().unwrap(), &[]).is_err());
             let ToolOutput::Json(page) = surface::run_session(
                 &mut session,
@@ -852,21 +973,27 @@ mod tests {
         let mut changed = contract;
         changed["revision"] = json!(2);
         let mut next = reply(surface::READ, "commands", json!({}), changed);
-        assert_eq!(first["version"], next["version"]);
+        assert_eq!(
+            first["outcome"]["data"]["version"],
+            next["outcome"]["data"]["version"]
+        );
         let mut known = BTreeMap::new();
         deduplicate(&mut first.clone(), &mut known);
         deduplicate(&mut next, &mut known);
-        assert_eq!(next["known"], true);
-        assert!(next.get("schema").is_none());
-        assert_eq!(next["artifact"], first["artifact"]);
+        assert_eq!(next["outcome"]["data"]["known"], true);
+        assert!(next["outcome"]["data"].get("schema").is_none());
+        assert_eq!(next["outcome"]["data"]["artifact"], first["artifact"]);
         let selected = reply(
             surface::READ,
             "measure",
             json!({"fields":["area_m2"]}),
             json!({"area_m2":1.234567890123456,"perimeter_m":4,"revision":2}),
         );
-        assert_eq!(selected["area_m2"], json!(1.234567890123456));
-        assert!(selected.get("perimeter_m").is_none());
+        assert_eq!(
+            selected["outcome"]["data"]["area_m2"],
+            json!(1.234567890123456)
+        );
+        assert!(selected["outcome"]["data"].get("perimeter_m").is_none());
     }
 
     #[test]
@@ -881,12 +1008,12 @@ mod tests {
                 json!({"offset":offset}),
                 evidence.clone(),
             );
-            for contract in page["commands"].as_array().unwrap() {
+            for contract in page["outcome"]["data"]["commands"].as_array().unwrap() {
                 assert!(contract["version"].is_string());
                 assert!(contract["artifact"].is_string());
                 names.insert(contract["name"].as_str().unwrap().to_owned());
             }
-            match page["next_offset"].as_u64() {
+            match page["outcome"]["data"]["next_offset"].as_u64() {
                 Some(next) => offset = next,
                 None => break,
             }
@@ -898,7 +1025,7 @@ mod tests {
             json!({"detail":"full"}),
             evidence.clone(),
         );
-        assert_eq!(full["commands"], evidence["commands"]);
+        assert_eq!(full["outcome"]["data"]["commands"], evidence["commands"]);
     }
 
     #[test]
@@ -928,7 +1055,7 @@ mod tests {
             panic!("JSON records")
         };
         assert_eq!(
-            value["records"][0]["data"]["vertices"]
+            value["outcome"]["data"]["records"][0]["data"]["vertices"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -945,7 +1072,10 @@ mod tests {
             }
         }
         let evidence: Value = serde_json::from_str(&evidence).unwrap();
-        assert_eq!(evidence["records"], value["records"]);
+        assert_eq!(
+            evidence["outcome"]["data"]["records"],
+            value["outcome"]["data"]["records"]
+        );
     }
     #[test]
     fn compact_brief_reports_keep_all_requirements_and_full_reports_keep_evidence() {
@@ -959,8 +1089,17 @@ mod tests {
         .unwrap() else {
             panic!("JSON");
         };
-        assert_eq!(summary["results"].as_array().unwrap().len(), 80);
-        assert_eq!(summary["results"][79]["text"], "Requirement 79");
+        assert_eq!(
+            summary["outcome"]["data"]["results"]
+                .as_array()
+                .unwrap()
+                .len(),
+            80
+        );
+        assert_eq!(
+            summary["outcome"]["data"]["results"][79]["text"],
+            "Requirement 79"
+        );
         let ToolOutput::Json(full) = format(
             surface::READ,
             "brief_check",
@@ -970,6 +1109,6 @@ mod tests {
         .unwrap() else {
             panic!("JSON");
         };
-        assert_eq!(full["results"], value["results"]);
+        assert_eq!(full["outcome"]["data"]["results"], value["results"]);
     }
 }

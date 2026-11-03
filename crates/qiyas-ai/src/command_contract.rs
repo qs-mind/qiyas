@@ -180,7 +180,7 @@ mod tests {
                 value.to_string().len()
             );
             assert!(value.get("artifact").is_none());
-            let contracts = value["commands"].as_array().unwrap();
+            let contracts = value["outcome"]["data"]["commands"].as_array().unwrap();
             assert_eq!(contracts.len(), 8);
             for contract in contracts {
                 assert!(contract["signature"].is_string(), "{contract}");
@@ -224,7 +224,7 @@ mod tests {
         else {
             panic!()
         };
-        assert_eq!(wire["schema"], full["schema"]);
+        assert_eq!(wire["outcome"]["data"]["schema"], full["schema"]);
     }
 
     #[test]
