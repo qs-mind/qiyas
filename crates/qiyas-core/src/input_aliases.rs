@@ -202,13 +202,8 @@ pub(crate) fn defaults(raw: &Value, canonical: &Value, prefix: &str) -> Vec<Defa
                             | "cols"
                             | "op"
                     )
+                    || (key == "rows" && a[key].is_array() && value.is_number())
                 {
-                    out.push(DefaultUsed {
-                        field: next,
-                        value: value.clone(),
-                        unit: None,
-                    });
-                } else if key == "rows" && a[key].is_array() && value.is_number() {
                     out.push(DefaultUsed {
                         field: next,
                         value: value.clone(),

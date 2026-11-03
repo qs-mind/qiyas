@@ -182,7 +182,7 @@ pub(crate) fn sheet_block(session: &Session, name: Option<&str>) -> Result<Strin
         .drawing
         .resolve_sheet(name)
         .map(|s| s.block)
-        .map_err(|e| bad(e.to_string()))
+        .map_err(|e| bad(&e.to_string()))
 }
 
 pub(crate) fn sheet_units(session: &Session, sheet: &str) -> String {

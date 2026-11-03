@@ -849,7 +849,7 @@ impl Session {
             // Report all remaining collisions, including untouched content in a subset arrange.
             let final_ink = self.sheet_ink(&sheet);
             let final_parts = self.drawing_parts(&sheet, &final_ink, gap / 2.0);
-            let report = self.check_drawing(&crate::CheckScope {
+            let report = self.check_drawing(&crate::check::CheckScope {
                 sheet: Some(sheet.clone()),
                 rules: vec!["text_over_text".into()],
                 ..Default::default()

@@ -1287,6 +1287,7 @@ mod sum_tests {
                         source: "drawing".into(),
                         clause: "Wall paths and hosted openings".into(),
                     }],
+                    wall_area_basis: None,
                     sources: vec![],
                     included: true,
                     decision: None,

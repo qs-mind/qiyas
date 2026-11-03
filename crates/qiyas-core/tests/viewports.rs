@@ -143,14 +143,8 @@ fn a_viewport_draws_model_space_without_the_layers_it_freezes() {
     let view = &views[0];
     assert_eq!(view.handle, vp);
     let bounds = s.model_batch().bounds;
-    for axis in 0..2 {
-        assert!(
-            (view.rect[1][axis]
-                - view.rect[0][axis]
-                - (bounds[1][axis] - bounds[0][axis]) * view.scale)
-                .abs()
-                < 1e-8
-        );
+    for (axis, (lo, hi)) in bounds[0].iter().zip(&bounds[1]).enumerate() {
+        assert!((view.rect[1][axis] - view.rect[0][axis] - (hi - lo) * view.scale).abs() < 1e-8);
     }
     assert!(view.scale > 0.0);
     // Nothing frozen: every range of the model batch.
