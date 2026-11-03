@@ -267,9 +267,10 @@ fn every_ribbon_button_names_a_command_or_a_window_tool() {
     ] {
         window.extend(window_names(source, declaration));
     }
-    let shell = include_str!("../../../src/shell/Ribbon.tsx");
-    let actions = shell
-        .split_once("function actions(")
+    // The window's one ribbon handler table (its type requires every default button).
+    let header = include_str!("../../../src/app/Header.tsx");
+    let actions = header
+        .split_once("const actions: RibbonHandlers = {")
         .unwrap()
         .1
         .split_once("\n  };")
@@ -277,7 +278,7 @@ fn every_ribbon_button_names_a_command_or_a_window_tool() {
         .0;
     window.extend(actions.lines().filter_map(|line| {
         let (name, handler) = line.trim().split_once(':')?;
-        handler.trim().starts_with("props.").then_some(name)
+        handler.trim().starts_with("{ run").then_some(name)
     }));
     // These controls have their own rendering and handlers instead of the action table.
     window.extend(["views", "groupSelect", "ucsIcon", "arabicReversed"]);
