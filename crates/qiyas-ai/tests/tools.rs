@@ -956,6 +956,10 @@ fn import_boq_opens_files_beside_the_drawing_only() {
         .unwrap_err();
         match err {
             ToolError::BadInput(why) => assert_eq!(why, OUTSIDE, "{path}"),
+            ToolError::Structured { code, message, .. } => {
+                assert_eq!(code, "refused", "{path}");
+                assert_eq!(message, OUTSIDE, "{path}");
+            }
             other => panic!("{path}: {other:?}"),
         }
     }

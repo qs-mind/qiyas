@@ -58,7 +58,6 @@
     "allow-entity-info",
     "allow-table-cell-at",
     "allow-run-command",
-    "allow-command-words",
     "allow-cmdline-step",
     "allow-undo",
     "allow-redo",

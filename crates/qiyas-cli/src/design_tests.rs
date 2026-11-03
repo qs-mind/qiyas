@@ -190,7 +190,9 @@ async fn scripted_design_writes_dwg_renders_logs_counts_usage_and_comparison() {
         if sheet["is_model"] == true || sheet["title_block"] == true {
             assert!(image
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|px| px[..3] != [255, 255, 255]));
         }
     }

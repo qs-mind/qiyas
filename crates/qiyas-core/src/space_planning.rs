@@ -865,7 +865,9 @@ mod tests {
                 }
                 hits.sort_by(f64::total_cmp);
                 expected.extend(
-                    hits.chunks_exact(2)
+                    hits.as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|pair| pair[1] - pair[0])
                         .filter(|w| *w > tol),
                 );

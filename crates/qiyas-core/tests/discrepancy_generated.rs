@@ -1,5 +1,4 @@
-#[path = "support/measurement_fixture.rs"]
-mod fixture;
+use crate::measurement_fixture as fixture;
 use qiyas_core::{Boq, BoqItem, Command, ConflictKind, Session, Source};
 use serde_json::json;
 #[test]
