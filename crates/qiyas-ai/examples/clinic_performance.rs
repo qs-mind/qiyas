@@ -199,14 +199,15 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
         );
         // Small labels now shrink or become linked notes; the recorded failed batch must
         // succeed. Keep every other recorded refusal and rollback assertion unchanged.
+        // Refusals the core now accepts: a room label that now fits, and a layer assignment to
+        // a missing layer, which now makes the layer in the same undo step.
         let label_fit_refusal = call["error"]
             .as_str()
             .and_then(|e| serde_json::from_str::<Value>(e).ok())
             .is_some_and(|e| {
-                e["command"] == "label_spaces"
-                    && e["message"]
-                        .as_str()
-                        .is_some_and(|m| m.contains("The room is too small for"))
+                let message = e["message"].as_str().unwrap_or_default();
+                (e["command"] == "label_spaces" && message.contains("The room is too small for"))
+                    || message.contains("The drawing has no layer")
             });
         // Undo keeps the handle counter moving on, so the refused state is restored whole.
         let refused_doc = label_fit_refusal.then(|| s.drawing.doc.clone());
@@ -286,7 +287,7 @@ pub fn replay(output_dir: Option<&std::path::Path>) -> Vec<std::time::Duration> 
         if label_fit_refusal && error.is_none() {
             // The recording continued from the refused state: take the step back so the later
             // recorded handles still name the same entities.
-            assert!(s.undo(), "the label step is undoable at call {i}");
+            assert!(s.undo(), "the now-accepted step is undoable at call {i}");
             s.drawing.doc = refused_doc.expect("saved before the label step");
         }
         let rollback_equal = if error.is_some() {
