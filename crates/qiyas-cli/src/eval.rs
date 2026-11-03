@@ -44,7 +44,7 @@ pub struct EvalArgs {
     /// Use the saved app provider, model and effort (also the default).
     #[arg(long)]
     pub provider_from_settings: bool,
-    /// Kareem's explicit approval for this one billable run.
+    /// The founder's explicit approval for this one billable run.
     #[arg(long)]
     pub approve_live_run: bool,
     /// Output tokens per provider request, including reasoning tokens.
@@ -854,7 +854,7 @@ pub(crate) fn prepare_case(source: &Path, output: &Path) -> Result<PreparedCase,
 
 pub fn run(args: &EvalArgs) -> Result<Value, String> {
     if !args.approve_live_run {
-        return Err("Live evaluation needs Kareem's OK for this run; after approval use --approve-live-run (no settings or keychain were read)".into());
+        return Err("Live evaluation needs the founder's OK for this run; after approval use --approve-live-run (no settings or keychain were read)".into());
     }
     for budget in [args.max_cost_usd, args.total_budget_usd]
         .into_iter()
@@ -1319,7 +1319,7 @@ mod tests {
             max_requests: 16,
             max_cost_usd: None,
         };
-        assert!(run(&args).unwrap_err().contains("Kareem's OK"));
+        assert!(run(&args).unwrap_err().contains("the founder's OK"));
     }
 
     #[test]
