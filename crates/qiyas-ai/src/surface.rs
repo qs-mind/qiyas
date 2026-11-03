@@ -1059,13 +1059,19 @@ pub fn run_session_with_method(
         return run_without_drawing(tool, op, args, None).unwrap_or_else(|| Err(bad("ask")));
     }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let (mut args, warnings) = crate::normalise::args(tool, op, args)?;
+        let (mut args, mut warnings) = crate::normalise::args(tool, op, args)?;
         let before = session.revision();
         let result = session
             .with_automation_sheet(|session| {
                 if tool == EXECUTE {
                     crate::revision::check(Some(session), &args)?;
                     args.as_object_mut().unwrap().remove("expected_revision");
+                }
+                // Raw commands resolve each step when it runs; shortcuts use the same core resolver.
+                if !matches!(op, "run" | "batch" | "validate" | "document") {
+                    let (schema, _) = crate::surface_args::contract(tool, op);
+                    warnings.extend(session.resolve_schema_handles(&schema, &mut args)?);
+                    session.resolve_schema_sheets(&schema, &mut args)?;
                 }
                 run_working_session(session, tool, op, &args, source, method)
             })
@@ -1916,6 +1922,7 @@ fn query(session: &Session, args: &Value) -> Result<ToolOutput, ToolError> {
                     crate::normalise::append(
                         v,
                         &[qiyas_core::validation::InputIssue {
+                            replaced: None,
                             code: "normalised_input".into(),
                             pointer: "/args/limit".into(),
                             message: "Normalised query limit to a page size (at most 500 rows)."
@@ -2055,10 +2062,11 @@ fn prepare_command(session: &Session, raw: &Value) -> Result<(Command, Value), T
     }
     // Use the registry's spelling after a lookup that accepts case and hyphens.
     qiyas_core::registry::canonicalize(&mut value);
+    let mut validated = value.clone();
     session
-        .resolve_input_handles(&mut value)
+        .resolve_input_handles(&mut validated)
         .map_err(|e| bad(e.to_string()))?;
-    let mut report = session.validate_input(&value);
+    let mut report = session.validate_input(&validated);
     batch_limits(&value, "", &mut report);
     if !report.valid {
         let serde_error = qiyas_core::registry::parse_command(value.clone())
@@ -2785,20 +2793,10 @@ fn plot(session: &mut Session, args: &Value) -> Result<Value, ToolError> {
         .get("sheet")
         .and_then(Value::as_str)
         .unwrap_or(&default_sheet);
-    let sheet = sheets
-        .iter()
-        .find(|s| s.name.eq_ignore_ascii_case(wanted) || s.block.eq_ignore_ascii_case(wanted))
-        .ok_or_else(|| {
-            bad(format!(
-                "No sheet {wanted}. Sheets: {}",
-                sheets
-                    .iter()
-                    .map(|s| s.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })?
-        .clone();
+    let sheet = session
+        .drawing
+        .resolve_sheet(wanted)
+        .map_err(|e| bad(e.to_string()))?;
     let catalog = qiyas_core::paper_catalog();
     let named_paper = match args.get("paper").and_then(Value::as_str) {
         Some(name) => Some(

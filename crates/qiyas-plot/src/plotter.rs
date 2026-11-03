@@ -188,10 +188,8 @@ fn plot_tol(pt: f64) -> f64 {
 pub fn snapshot(session: &Session, job: &PlotJob) -> Result<PlotSnapshot, PlotError> {
     let sheet = session
         .drawing
-        .sheets()
-        .into_iter()
-        .find(|s| s.block.eq_ignore_ascii_case(&job.sheet))
-        .ok_or_else(|| PlotError::NoSuchSheet(job.sheet.clone()))?;
+        .resolve_sheet(&job.sheet)
+        .map_err(|e| PlotError::NoSuchSheet(e.to_string()))?;
     // As on screen: for the extents.
     let screen = session.sheet_batch(&sheet.block);
     let views = if sheet.is_model {

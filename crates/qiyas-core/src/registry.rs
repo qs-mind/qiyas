@@ -247,6 +247,7 @@ pub(crate) fn is_handle_field(field: &str) -> bool {
             | "wall_handles"
             | "space_handles"
             | "opening_handles"
+            | "highlight"
     )
 }
 
@@ -959,6 +960,7 @@ pub fn normalization_warnings(raw: &Value) -> Vec<crate::validation::InputIssue>
     fn compare(a: &Value, b: &Value, path: &str, out: &mut Vec<crate::validation::InputIssue>) {
         if a["handles"].is_array() && b.get("handles").is_none() && b.get("handle").is_some() {
             out.push(crate::validation::InputIssue {
+                replaced: None,
                 code: "normalised_input".into(),
                 pointer: format!("{path}/handle"),
                 message: "Normalised the single handles entry to handle.".into(),
@@ -966,6 +968,7 @@ pub fn normalization_warnings(raw: &Value) -> Vec<crate::validation::InputIssue>
         }
         if a["where"].is_object() && b["where"].is_array() {
             out.push(crate::validation::InputIssue {
+                replaced: None,
                 code: "normalised_input".into(),
                 pointer: format!("{path}/where"),
                 message: "Normalised one where condition to an array.".into(),

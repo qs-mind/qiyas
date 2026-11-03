@@ -81,10 +81,13 @@ pub fn read(
     for rule in rules {
         rule.validate()?;
     }
+    let layouts: Vec<_> = layouts
+        .iter()
+        .map(|name| session.drawing.resolve_sheet(name).map(|s| s.block))
+        .collect::<Result<_, _>>()?;
     let mut result = vec![];
     for sheet in session.drawing.sheets() {
-        if !layouts.is_empty() && !layouts.contains(&sheet.name) && !layouts.contains(&sheet.block)
-        {
+        if !layouts.is_empty() && !layouts.contains(&sheet.block) {
             continue;
         }
         let filter = EntityFilter {
@@ -115,9 +118,12 @@ pub fn read(
             }
         };
         for rule in rules.iter().filter(|r| {
-            r.sheet
-                .as_ref()
-                .is_none_or(|s| s == &sheet.name || s == &sheet.block)
+            r.sheet.as_ref().is_none_or(|name| {
+                session
+                    .drawing
+                    .resolve_sheet(name)
+                    .is_ok_and(|s| s.block == sheet.block)
+            })
         }) {
             if let Some(tag) = &rule.attribute_tag {
                 for entity in &entities {

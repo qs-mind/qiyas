@@ -1055,3 +1055,89 @@ fn requested_sheet_scale_keeps_its_full_denominator_precision() {
         .unwrap();
     assert!((view.scale - 1000.0 / den).abs() < 1e-12);
 }
+
+#[test]
+fn sheet_references_share_names_numbers_blocks_and_close_suggestions() {
+    use qiyas_core::Source;
+    let (_dir, mut s) = blank(6);
+    for name in [
+        "A-101 Ground floor",
+        "A-201 Interiors and ceiling",
+        "A-601 Schedules and basis",
+    ] {
+        add_layout(&mut s, name, LayoutOrientation::Landscape);
+    }
+    let block = s
+        .drawing
+        .resolve_sheet("A-601 Schedules and basis")
+        .unwrap()
+        .block;
+    for name in [
+        "A-601 Schedules and basis",
+        "a-601 schedules AND basis",
+        "A-601",
+        "A-601 Schedules",
+        block.as_str(),
+    ] {
+        assert_eq!(s.drawing.resolve_sheet(name).unwrap().block, block);
+        s.run_input(&json!({"type":"set_sheet","block":name}), Source::Ai)
+            .unwrap();
+        assert_eq!(s.sheet, block);
+        s.run_input(&json!({"type":"set_layout_paper","name":name,"paper":"ISO A1","orientation":"landscape"}), Source::Ai).unwrap();
+        s.run_input(
+            &json!({"type":"records","query":{"sheet":name}}),
+            Source::Ai,
+        )
+        .unwrap();
+        s.run_input(&json!({"type":"arrange","sheet":name}), Source::Ai)
+            .unwrap();
+    }
+    s.set_sheet("model").unwrap();
+    s.run_input(
+        &json!({"type":"walls","runs":[{"points":[[0,0],[20,0]]}],
+        "thickness":0.2,"height":3,"openings":[{"run":0,"at":5,"width":1,"kind":"door"}]}),
+        Source::Ai,
+    )
+    .unwrap();
+    // Both live runs passed the display name Model as the schedule's source.
+    for (index, source) in ["Model", "model", "*Model_Space"].into_iter().enumerate() {
+        s.run_input(
+            &json!({"type":"opening_schedule","source_sheet":source,
+            "sheet":"A-601 Schedules","language":"en","at":[145,115 + index * 60]}),
+            Source::Ai,
+        )
+        .unwrap();
+        assert_eq!(s.sheet, MODEL);
+    }
+    for command in [
+        json!({"type":"set_sheet","block":"A-102 Interior details"}),
+        json!({"type":"opening_schedule","source_sheet":"A-102 Interior details","at":[0,0]}),
+        json!({"type":"records","query":{"sheet":"A-102 Interior details"}}),
+        json!({"type":"arrange","sheet":"A-102 Interior details"}),
+    ] {
+        let error = s.run_input(&command, Source::Ai).unwrap_err().to_string();
+        assert!(
+            error.contains("Closest sheets") && error.contains("A-201 Interiors and ceiling"),
+            "{error}"
+        );
+    }
+    add_layout(
+        &mut s,
+        "A-601 Equipment schedule",
+        LayoutOrientation::Landscape,
+    );
+    let error = s.drawing.resolve_sheet("A-601").unwrap_err().to_string();
+    assert!(
+        error.contains("Ambiguous")
+            && error.contains("Schedules and basis")
+            && error.contains("Equipment schedule"),
+        "{error}"
+    );
+    assert_eq!(
+        s.drawing
+            .resolve_sheet("A-601 Schedules and basis")
+            .unwrap()
+            .block,
+        block
+    );
+}

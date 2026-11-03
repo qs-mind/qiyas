@@ -364,6 +364,7 @@ impl Session {
         paper: &str,
         orientation: LayoutOrientation,
     ) -> Result<(), CoreError> {
+        let name = self.drawing.resolve_sheet(name)?.name;
         let paper = lookup_paper(paper)?;
         let layout = self
             .drawing
@@ -390,6 +391,7 @@ impl Session {
 
     /// Renames a paper layout and its dictionary entry, preserving its backing block and entities.
     pub(crate) fn rename_layout(&mut self, from: &str, to: &str) -> Result<(), CoreError> {
+        let from = self.drawing.resolve_sheet(from)?.name;
         let to = check_name(to)?;
         let doc = &mut self.drawing.doc;
         let handle = doc

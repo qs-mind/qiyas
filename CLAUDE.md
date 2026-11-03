@@ -309,6 +309,18 @@ rule and term citations remain required. Inferred values appear in `defaults_use
 nested batches. Quantities remain per-element expressions; totals sum evaluated values
 without parsing an ever-growing expression. No new standard or measurement facts are supplied.
 
+## Session references
+
+- Replacement handles survive command and batch boundaries in session memory. Rebuild maps and
+  deletion step labels follow undo/redo and transaction rollback; they are never written to files.
+  Commands and Mizan reads follow a unique replacement and report `warnings[].replaced` as an
+  old-to-current handle map. Deleted handles name the step and point to `wall_groups` or `records`;
+  split replacements require choosing a current element explicitly.
+- `Drawing::resolve_sheet` is the shared lookup for commands, reads, captures, schedules and plotting:
+  exact names first, then case-insensitive names or backing blocks, then a unique sheet-number prefix
+  (also with an outdated title). Ambiguous numbers require an exact name; missing names suggest the
+  closest sheets. Opening and room schedules accept `Model` as their source sheet.
+
 ## Records
 
 - `qiyas-core/src/records.rs`: every object as a record, `{key, type, …summary, data}`, where

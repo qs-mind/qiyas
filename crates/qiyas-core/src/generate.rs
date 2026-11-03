@@ -828,7 +828,7 @@ impl Session {
         let progress = crate::batch_progress::Batch::new(commands.len());
         for (index, expanded) in commands.into_iter().enumerate() {
             let Expanded {
-                mut input,
+                input,
                 template,
                 iteration,
                 values,
@@ -840,15 +840,8 @@ impl Session {
                     json!(values)
                 ))
             };
-            session.resolve_input_handles(&mut input).map_err(context)?;
-            let mut validation = session.validate_input(&input);
-            if !validation.valid {
-                for issue in &mut validation.errors {
-                    issue.pointer = format!("{prefix}{}", issue.pointer);
-                }
-                return Err(context(invalid(validation.message())));
-            }
             let mut previous = std::mem::take(&mut session.last_change);
+            // run_input resolves handles before validation and keeps each replacement warning.
             let report = session.run_input(&input, source);
             let change = std::mem::take(&mut session.last_change);
             let mut handles = change.added.clone();

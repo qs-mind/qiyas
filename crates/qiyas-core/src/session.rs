@@ -140,6 +140,7 @@ pub struct Session {
     pub(crate) last_change: crate::Change,
     pub(crate) last_advice: Vec<serde_json::Value>,
     pub(crate) revision_history: crate::read_revision::RevisionHistory,
+    pub(crate) handle_history: crate::handle_refs::HandleHistory,
     pub(crate) handle_replacements: std::collections::BTreeMap<u64, Vec<u64>>,
     /// How many transactions are open (`crate::transaction`).
     pub(crate) tx_depth: usize,
@@ -770,6 +771,7 @@ impl Session {
             last_change: crate::Change::default(),
             last_advice: Vec::new(),
             revision_history: Default::default(),
+            handle_history: Default::default(),
             handle_replacements: std::collections::BTreeMap::new(),
             tx_depth: 0,
             recipe_budget: Default::default(),
@@ -1188,12 +1190,7 @@ impl Session {
     }
 
     pub fn set_sheet(&mut self, block: &str) -> Result<(), CoreError> {
-        let sheet = self
-            .drawing
-            .sheets()
-            .into_iter()
-            .find(|s| s.block.eq_ignore_ascii_case(block))
-            .ok_or_else(|| CoreError::NoSuchSheet(block.to_string()))?;
+        let sheet = self.drawing.resolve_sheet(block)?;
         self.sheet = sheet.block;
         Ok(())
     }
@@ -1869,13 +1866,18 @@ impl Session {
         }
         let mut raw = serde_json::to_value(&cmd)
             .map_err(|error| CoreError::InvalidCommand(error.to_string()))?;
-        if self.tx_depth > 0 {
-            self.resolve_input_handles(&mut raw)?;
-            cmd = serde_json::from_value(raw.clone())
-                .map_err(|e| CoreError::InvalidCommand(e.to_string()))?;
-        } else {
+        if self.tx_depth == 0 {
             self.handle_replacements.clear();
         }
+        let warnings = self.resolve_input_handles(&mut raw)?;
+        self.resolve_input_sheets(&mut raw)?;
+        self.last_advice.extend(
+            warnings
+                .iter()
+                .map(|w| serde_json::to_value(w).expect("warning")),
+        );
+        cmd = serde_json::from_value(raw.clone())
+            .map_err(|e| CoreError::InvalidCommand(e.to_string()))?;
         let report = self.validate_input(&raw);
         if !report.valid {
             return Err(crate::input::with_warnings(
@@ -2133,6 +2135,7 @@ impl Session {
             conflicts: &mut self.conflicts,
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
+            handles: &mut self.handle_history,
             view: ViewRefs {
                 ucs: &mut self.ucs,
                 current: &mut self.current,
@@ -2204,6 +2207,7 @@ impl Session {
         let tables = tables.then(|| TablesSnapshot::take(&self.drawing.doc));
         let takeoff = takeoff.then(|| self.takeoff.clone());
         let previous_replacements = self.handle_replacements.clone();
+        let previous_handles = self.handle_history.clone();
         let derived_inputs = (derived_tables
             || self.drawing.doc.app_ids.contains(crate::field::FIELD_APP))
         .then(|| crate::derived::Inputs::capture(self))
@@ -2255,6 +2259,27 @@ impl Session {
             .filter_map(|(handle, old)| old.as_ref().map(|old| (handle.value(), old.clone())))
             .collect();
         let mut change = DocChange::from_before_images(&self.drawing.doc, before, tables, takeoff);
+        change.label = label.into();
+        for (handle, fate) in &mut self.handle_history {
+            if previous_handles.get(handle) != Some(&*fate) {
+                fate.step = label.into();
+            }
+        }
+        for entity in &change.removed {
+            let handle = entity.common().handle.value();
+            if previous_handles.get(&handle) == self.handle_history.get(&handle) {
+                self.handle_history.insert(
+                    handle,
+                    crate::handle_refs::HandleFate {
+                        replacements: Vec::new(),
+                        step: label.into(),
+                    },
+                );
+            } else if let Some(fate) = self.handle_history.get_mut(&handle) {
+                fate.step = label.into();
+            }
+        }
+        change.handles = crate::handle_refs::history_delta(&previous_handles, &self.handle_history);
         // Kept only when the change moved it, and then only what it moved, so undoing a step
         // never touches layers hidden or shown since.
         change.view = view
@@ -2299,7 +2324,13 @@ impl Session {
                     hidden: &mut self.visibility.hidden_layers,
                     state_hidden: &mut self.state_hidden,
                 };
-                change.swap(&mut self.drawing.doc, &mut self.takeoff, &mut view);
+                change.swap(
+                    &mut self.drawing.doc,
+                    &mut self.takeoff,
+                    &mut view,
+                    &mut self.handle_history,
+                );
+                self.handle_history = previous_handles;
                 if let Some(structure) = failed_structure {
                     self.drawing.doc.swap_structure(structure);
                 }
@@ -2409,6 +2440,7 @@ impl Session {
             conflicts: &mut self.conflicts,
             schedules: &mut self.schedules,
             doc: &mut self.drawing.doc,
+            handles: &mut self.handle_history,
             view: ViewRefs {
                 ucs: &mut self.ucs,
                 current: &mut self.current,

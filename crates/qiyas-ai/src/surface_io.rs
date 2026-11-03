@@ -180,15 +180,9 @@ pub(crate) fn sheet_block(session: &Session, name: Option<&str>) -> Result<Strin
     };
     session
         .drawing
-        .sheets()
-        .into_iter()
-        .find(|s| s.block.eq_ignore_ascii_case(name) || s.name.eq_ignore_ascii_case(name))
+        .resolve_sheet(name)
         .map(|s| s.block)
-        .ok_or_else(|| {
-            bad(&format!(
-                "No sheet named {name}; qiyas_read state gives the sheets"
-            ))
-        })
+        .map_err(|e| bad(e.to_string()))
 }
 
 pub(crate) fn sheet_units(session: &Session, sheet: &str) -> String {

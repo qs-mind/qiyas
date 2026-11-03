@@ -23,8 +23,12 @@ fn session_reports_info_and_switches_sheet() {
     assert_eq!(session.sheet, "*Model_Space");
 
     session.set_sheet("*Model_Space").unwrap();
+    let error = session.set_sheet("NOPE").unwrap_err().to_string();
     assert!(
-        matches!(session.set_sheet("NOPE"), Err(CoreError::NoSuchSheet(name)) if name == "NOPE")
+        error.contains("No sheet NOPE")
+            && error.contains("Closest sheets")
+            && error.contains("Model"),
+        "{error}"
     );
     assert_eq!(session.sheet, "*Model_Space");
 }

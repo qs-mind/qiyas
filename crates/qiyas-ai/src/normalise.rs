@@ -7,6 +7,7 @@ use qiyas_core::validation::InputIssue;
 use serde_json::{json, Value};
 fn warning(pointer: &str, message: &str) -> InputIssue {
     InputIssue {
+        replaced: None,
         code: "normalised_input".into(),
         pointer: pointer.into(),
         message: message.into(),
@@ -200,8 +201,12 @@ pub(crate) fn append(value: &mut Value, warnings: &[InputIssue]) {
     }
 }
 pub(crate) fn output(mut result: ToolOutput, warnings: &[InputIssue]) -> ToolOutput {
-    if let ToolOutput::Json(v) = &mut result {
-        append(v, warnings);
+    match &mut result {
+        ToolOutput::Json(v) => append(v, warnings),
+        ToolOutput::Image { caption, .. } if !warnings.is_empty() => {
+            caption.push_str(&format!("\nWarnings: {}", serde_json::json!(warnings)));
+        }
+        _ => {}
     }
     result
 }

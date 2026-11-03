@@ -139,6 +139,75 @@ impl Drawing {
         sheets
     }
 
+    /// Resolve a layout name, backing block or unique sheet number in this drawing.
+    pub fn resolve_sheet(&self, name: &str) -> Result<Sheet, CoreError> {
+        let wanted = name.trim();
+        let mut sheets = self.sheets();
+        if let Some(sheet) = sheets
+            .iter()
+            .find(|s| s.name == wanted || s.block == wanted)
+        {
+            return Ok(sheet.clone());
+        }
+        let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+        let exact: Vec<_> = sheets
+            .iter()
+            .filter(|s| same(&s.name, wanted) || same(&s.block, wanted))
+            .collect();
+        if exact.len() == 1 {
+            return Ok(exact[0].clone());
+        }
+        let number = |s: &str| s.split_whitespace().next().unwrap_or("").to_lowercase();
+        let prefix = number(wanted);
+        let numbered: Vec<_> = sheets
+            .iter()
+            .filter(|s| {
+                // A title without a sheet number is never a fuzzy match for an edit.
+                prefix.chars().any(|c| c.is_ascii_digit()) && number(&s.name) == prefix
+            })
+            .collect();
+        if exact.is_empty() && numbered.len() == 1 {
+            return Ok(numbered[0].clone());
+        }
+        if exact.len() > 1 || numbered.len() > 1 {
+            let candidates = if exact.len() > 1 { exact } else { numbered };
+            return Err(CoreError::InvalidCommand(format!(
+                "Ambiguous sheet {wanted}. Choose an exact name or block: {}",
+                candidates
+                    .iter()
+                    .map(|s| format!("{} ({})", s.name, s.block))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        // Rank suggestions by character edits; never select a fuzzy candidate automatically.
+        fn distance(a: &str, b: &str) -> usize {
+            let b: Vec<_> = b.to_lowercase().chars().collect();
+            let mut row: Vec<_> = (0..=b.len()).collect();
+            for (i, a) in a.to_lowercase().chars().enumerate() {
+                let mut diagonal = row[0];
+                row[0] = i + 1;
+                for (j, b) in b.iter().enumerate() {
+                    let old = row[j + 1];
+                    row[j + 1] = (old + 1)
+                        .min(row[j] + 1)
+                        .min(diagonal + usize::from(a != *b));
+                    diagonal = old;
+                }
+            }
+            row[b.len()]
+        }
+        sheets.sort_by_key(|s| {
+            (
+                distance(&prefix, &number(&s.name)),
+                distance(wanted, &s.name),
+            )
+        });
+        Err(CoreError::InvalidCommand(format!(
+            "No sheet {wanted}. Closest sheets: {}. Use records with collection layouts to list sheets.",
+            sheets.iter().take(4).map(|s| format!("{} ({})", s.name, s.block)).collect::<Vec<_>>().join(", "))))
+    }
+
     /// Every layer, sorted by name.
     pub fn layers(&self) -> Vec<LayerInfo> {
         let mut layers: Vec<LayerInfo> = self

@@ -806,3 +806,111 @@ fn opening_marks_are_accepted_at_creation_and_survive_rebuilds() {
         Some("D-M2")
     );
 }
+
+#[test]
+fn opening_references_survive_rebuilds_undo_redo_and_failed_batches() {
+    use qiyas_core::Source;
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new_blank(&dir.path().join("tower-floor.dxf"), 6);
+    let wall = draw(
+        &mut s,
+        serde_json::from_value(json!({
+            "type":"walls", "runs":[{"points":[[0,0],[20,0]]}], "thickness":0.2, "height":3,
+            "openings":[{"run":0,"at":5,"width":1,"kind":"door"}]
+        }))
+        .unwrap(),
+    );
+    let original = wall.inserts[0];
+    s.run_input(
+        &json!({"type":"add_wall_openings", "centreline":wall.centrelines[0],
+        "openings":[{"at":12,"width":1.2,"kind":"window","sill":0.9,"head":2.1}]}),
+        Source::Ai,
+    )
+    .unwrap();
+    let rebuilt = s.resolve_handle(original).unwrap();
+    assert_eq!(original, rebuilt);
+
+    // The tower run defined a symbol, then edited an opening using its pre-rebuild handle.
+    let report = s
+        .run_input(
+            &json!({"type":"batch","commands":[
+                {"type":"define_block","name":"DoorOut","base":[0,0],"entities":[
+                    {"type":"Line","data":{"start":{"x":0,"y":0,"z":0},"end":{"x":1,"y":0,"z":0}}},
+                    {"type":"Line","data":{"start":{"x":0,"y":0,"z":0},"end":{"x":0,"y":1,"z":0}}}
+                ]},
+                {"type":"edit_wall_opening","insert":original,"symbol":"DoorOut"}
+            ]}),
+            Source::Ai,
+        )
+        .unwrap();
+    assert!(matches!(report.outcome, Outcome::Batch { .. }));
+    let latest = s.resolve_handle(original).unwrap();
+    assert!(s.undo());
+    assert_eq!(s.resolve_handle(original).unwrap(), rebuilt);
+    assert!(s.redo());
+    assert_eq!(s.resolve_handle(original).unwrap(), latest);
+
+    // The office outside_check retained opening handles from before several rebuilds.
+    let read = s
+        .run_input(
+            &json!({"type":"outside_check","sheet":"Model",
+        "opening_handles":[original],"limit":200}),
+            Source::Ai,
+        )
+        .unwrap();
+    assert!(read.warnings.is_empty());
+    let records = s
+        .records(&qiyas_core::records::RecordQuery {
+            handles: vec![original],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(records.total, 1);
+    assert!(records.warnings.is_empty());
+
+    let error = s
+        .run_input(
+            &json!({"type":"batch","commands":[
+                {"type":"edit_wall_opening","insert":original,"width":1.1},
+                {"type":"edit_wall_opening","insert":original,"symbol":"Missing drawing block"}
+            ]}),
+            Source::Ai,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("Missing drawing block"));
+    assert_eq!(s.resolve_handle(original).unwrap(), latest);
+
+    s.run_input(
+        &json!({"type":"remove_wall_openings","inserts":[original]}),
+        Source::Ai,
+    )
+    .unwrap();
+    let error = s
+        .run_input(
+            &json!({"type":"outside_check","sheet":"Model",
+        "opening_handles":[original],"limit":200}),
+            Source::Ai,
+        )
+        .unwrap_err()
+        .to_string();
+    for text in ["erased", "remove_wall_openings", "wall_groups", "records"] {
+        assert!(error.contains(text), "{error}");
+    }
+    assert!(s.undo());
+    assert_eq!(s.resolve_handle(original).unwrap(), latest);
+    assert!(s.redo());
+    assert!(s
+        .resolve_handle(original)
+        .unwrap_err()
+        .to_string()
+        .contains("erased"));
+    s.save_as_headless(&dir.path().join("saved-floor.dxf"))
+        .unwrap();
+    let reopened = Session::open(&dir.path().join("saved-floor.dxf")).unwrap();
+    assert_eq!(reopened.resolve_handle(original).unwrap(), original);
+    assert!(reopened
+        .drawing
+        .doc
+        .get_entity(Handle::new(original))
+        .is_none());
+}

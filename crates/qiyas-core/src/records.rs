@@ -340,6 +340,19 @@ fn component_bounds(
 impl Session {
     /// The records of `q.collection` that match `q`, one page.
     pub fn records(&self, q: &RecordQuery) -> Result<RecordPage, CoreError> {
+        let mut resolved = q.clone();
+        if let Some(sheet) = &q.sheet {
+            resolved.sheet = Some(self.drawing.resolve_sheet(sheet)?.block);
+        }
+        let mut replacement_notes = Vec::new();
+        for handle in &mut resolved.handles {
+            let current = self.resolve_handle(*handle)?;
+            if current != *handle {
+                replacement_notes.push(format!("{{replaced: {} → {current}}}", *handle));
+                *handle = current;
+            }
+        }
+        let q = &resolved;
         let _read = self.evaluation_read()?;
         // Component summaries must not serialize every block's entity_handles merely to
         // apply `where layout=false` or select their measured summary fields.
@@ -430,6 +443,7 @@ impl Session {
         // A field no record has is left out with a warning naming what exists: the page still
         // comes, so one call answers instead of a refusal and a second call.
         let (mut warnings, absent) = validate_paths(&all, q)?;
+        warnings.extend(replacement_notes);
         let fields: Vec<String> = q
             .fields
             .iter()

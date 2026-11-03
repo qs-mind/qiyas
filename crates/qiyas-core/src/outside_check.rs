@@ -203,21 +203,10 @@ impl Session {
         let tol = self.outside_curve_tolerance();
         let mut rows = Vec::new();
         let mut measured = Vec::<(f64, String)>::new();
-        let sheets: Vec<_> = self
-            .drawing
-            .sheets()
-            .into_iter()
-            .filter(|s| {
-                query.sheet.as_ref().is_none_or(|q| {
-                    s.block.eq_ignore_ascii_case(q) || s.name.eq_ignore_ascii_case(q)
-                })
-            })
-            .collect();
-        if sheets.is_empty() {
-            return Err(CoreError::InvalidCommand(
-                "Sheet not found / اللوحة غير موجودة".into(),
-            ));
-        }
+        let sheets = match &query.sheet {
+            Some(name) => vec![self.drawing.resolve_sheet(name)?],
+            None => self.drawing.sheets(),
+        };
         let selected: BTreeSet<_> = sheets
             .iter()
             .filter_map(|s| doc.block_records.get(&s.block).map(|b| b.handle))

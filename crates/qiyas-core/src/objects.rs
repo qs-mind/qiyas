@@ -1466,6 +1466,11 @@ impl Session {
         let _profile = crate::fixtures::profile::span("objects.object_records_for");
         let _read = self.evaluation_read()?;
         self.validate_object_metadata()?;
+        let filter_sheet = filter
+            .sheet
+            .as_deref()
+            .map(|name| self.drawing.resolve_sheet(name).map(|s| s.block))
+            .transpose()?;
         let selected: BTreeSet<u64> = ids.unwrap_or_default().iter().copied().collect();
         let entities: Box<dyn Iterator<Item = &EntityType> + '_> = if ids.is_some() {
             Box::new(
@@ -1504,8 +1509,7 @@ impl Session {
                         .as_ref()
                         .is_none_or(|level| !level.eq_ignore_ascii_case(n))
                 })
-                || filter
-                    .sheet
+                || filter_sheet
                     .as_ref()
                     .is_some_and(|n| !n.eq_ignore_ascii_case(&sheet))
             {

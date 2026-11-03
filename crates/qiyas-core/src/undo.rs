@@ -39,6 +39,9 @@ pub(crate) enum Step {
 /// that redoes it, and so on.
 #[derive(Debug, Default)]
 pub(crate) struct DocChange {
+    pub label: String,
+    reversed: bool,
+    pub handles: crate::handle_refs::HandleDelta,
     /// Entities the change added, by handle.
     pub added: Vec<Handle>,
     /// Entities the change removed, as they were.
@@ -419,6 +422,7 @@ impl DocChange {
     /// True when the change left the drawing (and the take-off) as they were.
     pub(crate) fn is_empty(&self, doc: &CadDocument) -> bool {
         self.added.is_empty()
+            && self.handles.is_empty()
             && self.removed.is_empty()
             && self.replaced.is_empty()
             && self.takeoff.is_none()
@@ -434,11 +438,49 @@ impl DocChange {
         doc: &mut CadDocument,
         takeoff: &mut Takeoff,
         view: &mut ViewRefs,
+        handles: &mut crate::handle_refs::HandleHistory,
     ) -> DocChange {
-        let mut redo = DocChange::default();
+        let added: HashSet<_> = self.added.iter().map(|h| h.value()).collect();
+        let mut reverse = BTreeMap::<u64, Vec<u64>>::new();
+        for entity in &self.removed {
+            let old = entity.common().handle.value();
+            if let Some(fate) = handles.get(&old) {
+                for new in &fate.replacements {
+                    if added.contains(new) {
+                        reverse.entry(*new).or_default().push(old);
+                    }
+                }
+            }
+        }
+        let mut redo = DocChange {
+            label: self.label.clone(),
+            reversed: !self.reversed,
+            ..Default::default()
+        };
+        for (handle, before) in self.handles {
+            let now = match before {
+                Some(fate) => handles.insert(handle, fate),
+                None => handles.remove(&handle),
+            };
+            redo.handles.insert(handle, now);
+        }
         for handle in self.added {
             if let Some(entity) = doc.remove_entity_arc(handle) {
                 redo.removed.push(entity);
+                if !self.label.is_empty() {
+                    let old = handles.insert(
+                        handle.value(),
+                        crate::handle_refs::HandleFate {
+                            replacements: reverse.remove(&handle.value()).unwrap_or_default(),
+                            step: format!(
+                                "{} {}",
+                                if self.reversed { "redo" } else { "undo" },
+                                self.label
+                            ),
+                        },
+                    );
+                    redo.handles.entry(handle.value()).or_insert(old);
+                }
             }
         }
         for entity in self.removed {
@@ -465,6 +507,7 @@ pub(crate) struct Parts<'a> {
     pub conflicts: &'a mut Vec<Conflict>,
     pub schedules: &'a mut Vec<Schedule>,
     pub doc: &'a mut CadDocument,
+    pub handles: &'a mut crate::handle_refs::HandleHistory,
     pub view: ViewRefs<'a>,
     /// Set when the drawing was put back, so the session redraws it.
     pub doc_changed: &'a mut bool,
@@ -479,6 +522,7 @@ impl Parts<'_> {
             conflicts: &mut *self.conflicts,
             schedules: &mut *self.schedules,
             doc: &mut *self.doc,
+            handles: &mut *self.handles,
             view: ViewRefs {
                 ucs: &mut *self.view.ucs,
                 current: &mut *self.view.current,
@@ -503,7 +547,12 @@ impl Step {
             ),
             Step::Document(change) => {
                 *parts.doc_changed = true;
-                Step::Document(change.swap(parts.doc, parts.takeoff, &mut parts.view))
+                Step::Document(change.swap(
+                    parts.doc,
+                    parts.takeoff,
+                    &mut parts.view,
+                    parts.handles,
+                ))
             }
             // Each step in the order held; what redoes them goes the other way round.
             Step::Group(steps, view) => {
@@ -797,6 +846,7 @@ mod tests {
             };
             history.record(step, Source::User, "test");
         }
+        let mut handles = Default::default();
         let undone = std::iter::from_fn(|| {
             let parts = Parts {
                 takeoff: &mut takeoff,
@@ -804,6 +854,7 @@ mod tests {
                 conflicts: &mut conflicts,
                 schedules: &mut schedules,
                 doc: &mut doc,
+                handles: &mut handles,
                 view: ViewRefs {
                     ucs: &mut ucs,
                     current: &mut current,

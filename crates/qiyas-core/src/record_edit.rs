@@ -326,6 +326,7 @@ impl Session {
             let mut error = |code: &str, field: &str, message: String| {
                 report.valid = false;
                 report.errors.push(InputIssue {
+                    replaced: None,
                     code: code.into(),
                     pointer: format!("{prefix}/{field}"),
                     message,
@@ -863,6 +864,7 @@ fn missing_replacement_fields(
                     if let Some(message) = required_record_field(kind, probe) {
                         report.valid = false;
                         report.errors.push(crate::validation::InputIssue {
+                            replaced: None,
                             code: "missing_field".into(),
                             pointer: next_result,
                             message,

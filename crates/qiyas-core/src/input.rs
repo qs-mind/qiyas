@@ -116,6 +116,76 @@ pub(crate) fn with_warnings(error: CoreError, warnings: &[InputIssue]) -> CoreEr
 }
 
 impl Session {
+    pub(crate) fn resolve_input_sheets(&self, input: &mut Value) -> Result<(), CoreError> {
+        if let Some(info) = input["type"]
+            .as_str()
+            .and_then(|name| crate::registry::registry().get(name))
+        {
+            self.resolve_schema_sheets(&info.schema, input)?;
+        }
+        Ok(())
+    }
+
+    /// Resolve schema-owned sheet references without interpreting arbitrary drawing data.
+    pub fn resolve_schema_sheets(
+        &self,
+        schema: &Value,
+        input: &mut Value,
+    ) -> Result<(), CoreError> {
+        // Project rules select sheets in other drawings when the register is read.
+        if input["type"] == "project" || input["kind"] == "set_register_rules" {
+            return Ok(());
+        }
+        fn walk(
+            session: &Session,
+            schema: &Value,
+            value: &mut Value,
+            field: &str,
+        ) -> Result<(), CoreError> {
+            if schema["properties"].as_object().is_some_and(|props| {
+                props.iter().any(|(key, sub)| {
+                    value.get(key).is_some_and(|actual| {
+                        sub.get("const").is_some_and(|expected| actual != expected)
+                            || sub["enum"]
+                                .as_array()
+                                .is_some_and(|values| !values.contains(actual))
+                    })
+                })
+            }) {
+                return Ok(());
+            }
+            if matches!(field, "sheet" | "source_sheet") {
+                if let Some(name) = value.as_str() {
+                    *value = json!(session.drawing.resolve_sheet(name)?.block);
+                    return Ok(());
+                }
+            }
+            for variant in ["anyOf", "oneOf", "allOf"] {
+                if let Some(variants) = schema[variant].as_array() {
+                    for sub in variants {
+                        walk(session, sub, value, field)?;
+                    }
+                }
+            }
+            if let Some(items) = value.as_array_mut() {
+                for item in items {
+                    walk(session, &schema["items"], item, field)?;
+                }
+            }
+            if let (Some(map), Some(props)) =
+                (value.as_object_mut(), schema["properties"].as_object())
+            {
+                for (key, sub) in props {
+                    if let Some(value) = map.get_mut(key) {
+                        walk(session, sub, value, key)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        walk(self, schema, input, "")
+    }
+
     /// Validates the complete raw input, reads a plain command, resolves omitted defaults in
     /// the current session, and executes it. Every JSON boundary uses this entry point.
     pub fn run_input(&mut self, raw: &Value, source: Source) -> Result<Reported, CoreError> {
@@ -141,7 +211,7 @@ impl Session {
         {
             self.check_revision(&expected)?;
         }
-        let block = self.sheet_block(Some(&sheet));
+        let block = self.drawing.resolve_sheet(&sheet)?.block;
         if self.block_edit.is_some() && !block.eq_ignore_ascii_case(&self.sheet) {
             return Err(CoreError::InvalidCommand(
                 "Finish editing the block before targeting another sheet.".into(),
@@ -182,8 +252,10 @@ impl Session {
             self.check_revision(&expected)?;
         }
         crate::registry::canonicalize(&mut input);
-        self.resolve_input_handles(&mut input)?;
+        let replacements = self.resolve_input_handles(&mut input)?;
+        self.resolve_input_sheets(&mut input)?;
         let mut report = self.validate_input(&input);
+        report.warnings.extend(replacements);
         report
             .defaults_used
             .extend(crate::input_aliases::defaults(raw, &input, ""));
@@ -273,8 +345,9 @@ impl Session {
             let mut reports = Vec::new();
             for (index, input) in inputs.iter().enumerate() {
                 let mut input = input.clone();
-                session.resolve_input_handles(&mut input)?;
+                let replacements = session.resolve_input_handles(&mut input)?;
                 let mut report = session.validate_input(&input);
+                report.warnings.extend(replacements);
                 report
                     .warnings
                     .extend(crate::registry::normalization_warnings(&original[index]));

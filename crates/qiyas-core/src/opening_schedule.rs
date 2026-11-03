@@ -144,11 +144,12 @@ impl Session {
         } else {
             "*Model_Space"
         });
+        let name = self.drawing.resolve_sheet(name)?.block;
         let source = self
             .drawing
             .doc
             .block_records
-            .get(name)
+            .get(&name)
             .ok_or_else(|| {
                 invalid("Opening schedule source_sheet must name a drawing sheet block")
             })?
@@ -159,7 +160,7 @@ impl Session {
             spec.language = Some("ar".into());
         }
         spec.filter = ObjectFilter {
-            sheet: Some(name.into()),
+            sheet: Some(name),
             ..spec.filter
         };
         self.mark_openings(source)?;

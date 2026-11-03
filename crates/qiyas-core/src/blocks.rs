@@ -1026,6 +1026,7 @@ impl Session {
                         hidden: &mut self.visibility.hidden_layers,
                         state_hidden: &mut self.state_hidden,
                     },
+                    &mut self.handle_history,
                 );
                 self.block_edit = Some(edit);
                 return Err(e);

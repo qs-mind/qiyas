@@ -3495,3 +3495,61 @@ fn surface_preserves_inferred_defaults_through_prepare_and_batch() {
         "{out}"
     );
 }
+
+#[test]
+fn live_sheet_name_failures_resolve_or_offer_current_sheets() {
+    let (dir, mut s) = sample();
+    call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"run","args":{"command":{
+            "type":"make_sheet","name":"A-601 Schedules and basis","drawing_no":"A-601",
+            "title":"Schedules and basis","project":"Tower floor","language":"en"
+        }}}),
+    )
+    .unwrap();
+    call(&mut s, EXECUTE, json!({"op":"run","args":{"command":{
+        "type":"new_layout","name":"A-201 Interiors and ceiling","paper":"ISO A1","orientation":"landscape"
+    }}})).unwrap();
+    let plotted = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"plot","args":{
+            "sheet":"A-601 Schedules","path":"tower-schedules.pdf"
+        }}),
+    )
+    .unwrap();
+    assert!(dir.path().join("tower-schedules.pdf").exists(), "{plotted}");
+    let error = call(
+        &mut s,
+        EXECUTE,
+        json!({"op":"plot","args":{
+            "sheet":"A-102 Interior details","path":"tower-details.pdf"
+        }}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Closest sheets") && error.contains("A-201 Interiors and ceiling"),
+        "{error}"
+    );
+    assert!(!dir.path().join("tower-details.pdf").exists());
+    let captured = surface::run_session(
+        &mut s,
+        CAPTURE,
+        "picture",
+        &json!({"sheet":"a-601","width":320}),
+        Source::Ai,
+    )
+    .unwrap();
+    assert!(matches!(captured, ToolOutput::Image { .. }));
+    let page = call(
+        &mut s,
+        READ,
+        json!({"op":"records","args":{
+            "collection":"entities","sheet":"A-601 Schedules"
+        }}),
+    )
+    .unwrap();
+    assert!(page["total"].as_u64().unwrap() > 0, "{page}");
+}

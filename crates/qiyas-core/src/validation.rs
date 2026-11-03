@@ -8,6 +8,8 @@ use crate::{registry::registry, Session, Units};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InputIssue {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<std::collections::BTreeMap<u64, u64>>,
     pub code: String,
     pub pointer: String,
     pub message: String,
@@ -85,6 +87,7 @@ impl ValidationReport {
     fn error(&mut self, code: &str, pointer: &str, message: impl Into<String>) {
         self.valid = false;
         self.errors.push(InputIssue {
+            replaced: None,
             code: code.into(),
             pointer: pointer.into(),
             message: message.into(),
@@ -649,6 +652,7 @@ fn reference(value: &Value, path: &str, step: Option<usize>, out: &mut Validatio
         .filter(|key| !matches!(key.as_str(), "$step" | "pointer"))
     {
         out.warnings.push(InputIssue {
+            replaced: None,
             code: "unknown_field".into(),
             pointer: pointer(path, key),
             message: format!("Unknown reference field {key}; it is ignored"),
@@ -798,6 +802,7 @@ fn input_schema(
                             input_schema(sub, value, &pointer(path, key), step, &[], out);
                     }
                     _ if shared.is_empty() => out.warnings.push(InputIssue {
+                        replaced: None,
                         code: "unknown_field".into(),
                         pointer: pointer(path, key),
                         message: unknown_field_message(key, &known),

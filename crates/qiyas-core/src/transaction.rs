@@ -126,6 +126,7 @@ impl Session {
             self.last_advice.clear();
         }
         let replacements = self.handle_replacements.clone();
+        let handle_history = self.handle_history.clone();
         if self.tx_depth == 0 {
             self.handle_replacements.clear();
         }
@@ -171,6 +172,7 @@ impl Session {
                     conflicts: &mut self.conflicts,
                     schedules: &mut self.schedules,
                     doc: &mut self.drawing.doc,
+                    handles: &mut self.handle_history,
                     view: ViewRefs {
                         ucs: &mut self.ucs,
                         current: &mut self.current,
@@ -182,6 +184,7 @@ impl Session {
                 self.drawing.doc.swap_structure(structure);
                 view.put_back(self);
                 self.handle_replacements = replacements;
+                self.handle_history = handle_history;
                 self.last_change = change;
                 self.last_advice = advice;
                 self.check_before = check_before;

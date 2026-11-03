@@ -390,3 +390,19 @@ fn joined_wall_edits_retrace_the_room_and_update_its_schedule() {
     assert_eq!(text(&s, label), "Area 22.04 m²");
     assert_eq!(cell(&s, schedule, 2), "22.04");
 }
+
+#[test]
+fn room_schedule_accepts_model_display_name_and_numbered_target_sheet() {
+    let (_dir, mut s, _, _, _) = setup(6);
+    run(
+        &mut s,
+        json!({"type":"new_layout","name":"A-601 Schedules and basis","paper":"ISO A1","orientation":"landscape"}),
+    );
+    let table = add(
+        &mut s,
+        json!({"type":"room_schedule","source_sheet":"model",
+        "sheet":"A-601 Schedules","at":[145,115],"language":"en"}),
+    );
+    assert_eq!(cell(&s, table, 1), "12.00");
+    assert_eq!(s.sheet, "*Model_Space");
+}

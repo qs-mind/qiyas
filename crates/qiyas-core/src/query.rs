@@ -461,17 +461,15 @@ impl Session {
         summary
     }
 
-    /// The block of the sheet named by its block or layout name (case-insensitive); the
-    /// current sheet when `None`. An unknown name is used as a block name as it is.
+    /// Use the shared sheet resolver; internal block reads may also name a definition.
+    /// Command boundaries validate sheet references before these infallible read helpers.
     pub(crate) fn sheet_block(&self, sheet: Option<&str>) -> String {
         let Some(name) = sheet else {
             return self.sheet.clone();
         };
         self.drawing
-            .sheets()
-            .into_iter()
-            .find(|s| s.block.eq_ignore_ascii_case(name) || s.name.eq_ignore_ascii_case(name))
-            .map_or_else(|| name.to_string(), |s| s.block)
+            .resolve_sheet(name)
+            .map_or_else(|_| name.to_string(), |s| s.block)
     }
 
     pub(crate) fn entity_row(&self, xrefs: &XrefDocs, c: Candidate) -> EntityRow {

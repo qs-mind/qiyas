@@ -90,7 +90,7 @@ pub struct PlotOutput {
 pub enum PlotError {
     #[error("Nothing to plot: the area is empty")]
     Nothing,
-    #[error("No sheet {0} in this drawing")]
+    #[error("{0}")]
     NoSuchSheet(String),
     #[error("{0}")]
     Paper(String),
@@ -127,10 +127,8 @@ pub fn plot_snapshot(session: &Session, job: &PlotJob) -> Result<PlotSnapshot, P
 pub fn default_file_name(session: &Session, sheet: &str) -> Result<String, PlotError> {
     let name = session
         .drawing
-        .sheets()
-        .into_iter()
-        .find(|s| s.block.eq_ignore_ascii_case(sheet))
-        .ok_or_else(|| PlotError::NoSuchSheet(sheet.to_string()))?
+        .resolve_sheet(sheet)
+        .map_err(|e| PlotError::NoSuchSheet(e.to_string()))?
         .name;
     let stem = session
         .drawing
