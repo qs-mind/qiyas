@@ -3056,9 +3056,11 @@ In this repo, `docs/` (write new specs, plans, checks and reports here, never in
   error. Classification sees the complete scrubbed response, before support-log clipping. Temporary 429, 5xx, connection failures and interrupted/overloaded streams use bounded
   backoff. Each wait logs `RETRY`, the reason, wait and available partial text, and emits
   `retrying {seconds, code, discard_partial}`. Unfinished text is removed before a repeated
-  response; no tool from an unfinished response executes. The existing retry after an answer
+  response. A broken transport executes no tools. A terminal output-limit response retains
+  finished calls and text; unfinished calls are withheld. The existing retry after an answer
   uses all its room thinking also emits the notice. Cancellation interrupts the wait.
-  Strict-budget providers disable automatic retries; model discovery does too. HTTP requests
+  Strict-budget adapters disable internal retries; each further agent request passes through
+  its metered host for reservation. Model discovery does not retry. HTTP requests
   now have a 10-minute total deadline in addition to connect/read timeouts.
 - A context-limit refusal gets at most one smaller request. Large tool-result text and pictures
   are shortened, with explicit reread markers and intact call/result pairing and user words.
@@ -3310,7 +3312,22 @@ it is not appended to desktop drawing chats. The existing budget-stop report tes
   stream events. Final `response.completed.output` fills gaps; an empty or partial final array
   cannot erase streamed text or calls. Item IDs, output indices and call IDs keep repeated
   snapshots from duplicating calls or visible text. Reasoning items retain their opaque payload
-  for subsequent Responses requests. Interrupted/incomplete responses still execute no calls.
+  for subsequent Responses requests. Broken transports execute no calls and use the bounded
+  5/15/45/55-second retry schedule, timed from the first failure. Malformed event/item errors use `stream_parse`, separately
+  from provider stops. Terminal incomplete responses retain finished calls and text, log the
+  provider reason, and preserve that reason in design-run steps and failure details.
+  Output limits retry the same request once before any tool executes, with the largest
+  advertised plan output budget (provider default when discovery supplies none). Repeated
+  calls in those two attempts are matched by name and exact input, once per occurrence;
+  other completed output is retained. If still incomplete, execute finished calls and continue
+  with their results and the partial text in history. No-progress empty continuations stop
+  clearly. Other incomplete reasons stop with the reason visible in both languages.
+  API adapters use the shared continuation policy and the existing 64,000-token recovery cap;
+  if that fallback budget is refused, continuation uses the original budget.
+  Claude Code resumes its existing session instead of replaying drawing mutations; its
+  message IDs deduplicate usage across resume attempts. Local agents never receive a generic
+  restart. Provider adapters own transport backoff; hosts without one retry Temporary failures
+  inside the same autonomous turn. Successful and incomplete request usage is counted once.
 - A completed response with no answer, refusal or call fails with `ai.error.chatgpt_empty` in
   English/Arabic. The support log records item types and usage, never encrypted reasoning or
   authentication material. Possible credential prefixes are held across text/thinking deltas,

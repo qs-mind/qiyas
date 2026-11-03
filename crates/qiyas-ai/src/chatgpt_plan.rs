@@ -287,6 +287,8 @@ pub struct PlanModel {
     pub reasoning_efforts: Vec<String>,
     #[serde(default)]
     pub image_input: Option<bool>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
 }
 
 pub type Reauthorize = Arc<dyn Fn() -> BoxFuture<'static, Result<(), AiError>> + Send + Sync>;
@@ -433,7 +435,10 @@ impl ChatgptPlan {
         tokens: &Tokens,
         req: &mut TurnRequest,
     ) -> Result<(), AiError> {
-        if req.model.trim().is_empty() || (!req.effort.is_empty() && req.effort != "none") {
+        if req.max_tokens == 0
+            || req.model.trim().is_empty()
+            || (!req.effort.is_empty() && req.effort != "none")
+        {
             let cached = self
                 .models
                 .lock()
@@ -458,6 +463,13 @@ impl ChatgptPlan {
                     .ok_or(AiError::Subscription("chatgpt_model"))?
                     .id
                     .clone();
+            }
+            if req.max_tokens == 0 {
+                req.max_tokens = models
+                    .iter()
+                    .find(|m| m.id == req.model)
+                    .and_then(|m| m.max_output_tokens)
+                    .unwrap_or(0);
             }
             if !models
                 .iter()
@@ -494,6 +506,12 @@ impl ChatgptPlan {
     }
 }
 impl Provider for ChatgptPlan {
+    fn handles_temporary_retries(&self) -> bool {
+        true
+    }
+    fn recovery_output_tokens(&self, _model: &str) -> u32 {
+        0
+    }
     fn image_input(&self, model: &str) -> Option<bool> {
         self.models.lock().ok().and_then(|models| {
             models

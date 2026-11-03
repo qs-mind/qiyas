@@ -1047,41 +1047,52 @@ impl Agent {
         let mut usage = Usage::default();
         let mut requests = 0;
         let mut context_retried = false;
-        // Grows when an answer spends all its room thinking (see `MAX_TOKENS_CAP`).
+        let mut temporary_retry = crate::RetryBackoff::default();
+        let mut retry_started = None;
+        let mut repeat_request: Option<TurnRequest> = None;
+        let mut output_retried = false;
+        let mut retained_output = None;
+        let mut empty_continuations = 0;
+        // The provider supplies its advertised limit, or its own default.
         let mut max_tokens = self.settings.max_tokens;
         loop {
             if cancel.is_cancelled() {
                 return self.stop(&events, "cancelled").await;
             }
-            self.maintain_history();
-            if crate::history::tokens(&self.history) > MAX_INPUT_TOKENS && !self.fit_history() {
-                return self.stop(&events, TOO_LONG).await;
-            }
-            let provider_notice = self.provider.budget_notice();
-            let near_limit = counts.calls * 5 >= counts.limit() * 4
-                || provider_notice
-                    .as_ref()
-                    .is_some_and(|n| n.contains("[finish now]"));
-            // Once per turn: it is efficiency advice, not a reason to stop.
-            let notice = (near_limit && !counts.cost_noted)
-                .then(|| self.job.budget(self.chat_language).to_string());
-            if let Some(text) = notice {
-                counts.cost_noted = true;
-                self.push_user(vec![ContentBlock::Text { text }]);
-            }
-            if let Some(text) = provider_notice {
-                self.push_user(vec![ContentBlock::Text { text }]);
-            }
-            let messages = self.history.clone();
-            let req = TurnRequest {
-                cache_key: self.id.clone(),
-                system: system.clone(),
-                messages,
-                tools: tools.clone(),
-                model: self.settings.model.clone(),
-                effort: self.settings.effort.clone(),
-                max_tokens,
+            let req = if let Some(req) = repeat_request.take() {
+                req
+            } else {
+                self.maintain_history();
+                if crate::history::tokens(&self.history) > MAX_INPUT_TOKENS && !self.fit_history() {
+                    return self.stop(&events, TOO_LONG).await;
+                }
+                let provider_notice = self.provider.budget_notice();
+                let near_limit = counts.calls * 5 >= counts.limit() * 4
+                    || provider_notice
+                        .as_ref()
+                        .is_some_and(|n| n.contains("[finish now]"));
+                // Once per turn: it is efficiency advice, not a reason to stop.
+                let notice = (near_limit && !counts.cost_noted)
+                    .then(|| self.job.budget(self.chat_language).to_string());
+                if let Some(text) = notice {
+                    counts.cost_noted = true;
+                    self.push_user(vec![ContentBlock::Text { text }]);
+                }
+                if let Some(text) = provider_notice {
+                    self.push_user(vec![ContentBlock::Text { text }]);
+                }
+                let messages = self.history.clone();
+                TurnRequest {
+                    cache_key: self.id.clone(),
+                    system: system.clone(),
+                    messages,
+                    tools: tools.clone(),
+                    model: self.settings.model.clone(),
+                    effort: self.settings.effort.clone(),
+                    max_tokens,
+                }
             };
+            let sent_request = req.clone();
             requests += 1;
             let started = Instant::now();
             let cache_cause = self
@@ -1095,12 +1106,25 @@ impl Agent {
                     _ => "no local rebuild; provider cache residency is unknown".into(),
                 });
             self.last_request = Some(started);
-            let Some(turn) = self.stream(req, requests, &events, &cancel).await else {
+            let Some(turn) = self
+                .stream(req, requests, &events, &cancel, retained_output.is_some())
+                .await
+            else {
                 // The partial answer is dropped; the next user message joins this turn's.
                 return self.stop(&events, "cancelled").await;
             };
-            let turn = match turn {
+            let mut turn = match turn {
                 Ok(turn) => turn,
+                Err(error) if error.code() == "output_limit" && retained_output.is_some() => {
+                    // A model may advertise no limit and refuse the fallback recovery budget.
+                    max_tokens = self.settings.max_tokens;
+                    self.log("RETRY", || "The larger output budget was refused; continuing the retained output with the original budget.".into());
+                    crate::TurnResult {
+                        content: Vec::new(),
+                        stop_reason: StopReason::MaxTokens,
+                        usage: Usage::default(),
+                    }
+                }
                 Err(e) => {
                     self.log("ERROR", || match &e {
                         AiError::Api { body, request, .. } => {
@@ -1113,6 +1137,35 @@ impl Agent {
                         }
                         _ => e.to_string(),
                     });
+                    if !self.provider.owns_turn()
+                        && !self.provider.handles_temporary_retries()
+                        && matches!(
+                            e.public_error().failure.kind,
+                            crate::provider_error::FailureKind::Temporary
+                                | crate::provider_error::FailureKind::RateLimited
+                        )
+                    {
+                        if let Some(delay) = temporary_retry.next_delay(
+                            e.public_error().failure.retry_after,
+                            retry_started.get_or_insert_with(Instant::now).elapsed(),
+                        ) {
+                            self.emit(
+                                &events,
+                                AgentEvent::Retrying {
+                                    seconds: delay.as_secs(),
+                                    code: e.public_error().code,
+                                    discard_partial: true,
+                                },
+                            )
+                            .await;
+                            tokio::select! {
+                                _ = cancel.cancelled() => return self.stop(&events, "cancelled").await,
+                                _ = tokio::time::sleep(delay) => {}
+                            }
+                            repeat_request = Some(sent_request);
+                            continue;
+                        }
+                    }
                     if !self.provider.owns_turn()
                         && e.code() == "context_too_long"
                         && !context_retried
@@ -1134,12 +1187,33 @@ impl Agent {
                             continue;
                         }
                     }
+                    if let Some(partial) = retained_output.take() {
+                        for block in &partial {
+                            if let ContentBlock::Text { text } = block {
+                                self.emit(&events, AgentEvent::Text { text: text.clone() })
+                                    .await;
+                            }
+                        }
+                        let assistant = Message::assistant(partial);
+                        let unrun = assistant
+                            .tool_uses()
+                            .map(|(id, _, _)| error_result(id, "Not run: recovery request failed."))
+                            .collect::<Vec<_>>();
+                        if !assistant.content.is_empty() {
+                            self.history.push(assistant);
+                        }
+                        if !unrun.is_empty() {
+                            self.history.push(Message::user(unrun));
+                        }
+                    }
                     // Provider errors are displayed once by the window, in its language.
                     // A failed drawing request must never produce a take-off end report.
                     self.update_checkpoint();
                     return Err(e);
                 }
             };
+            temporary_retry = crate::RetryBackoff::default();
+            retry_started = None;
             self.log(
                 &format!(
                     "ANSWER {requests} ({:.1} s)",
@@ -1155,6 +1229,61 @@ impl Agent {
             usage.add(turn.usage);
             self.log("TURN CACHE", || tokens(&usage));
             self.emit(&events, AgentEvent::CacheUsage { usage }).await;
+            // Each response's usage was counted above, including the first incomplete attempt.
+            if matches!(turn.stop_reason, StopReason::MaxTokens)
+                && !self.provider.owns_turn()
+                && !output_retried
+            {
+                output_retried = true;
+                max_tokens = self.provider.recovery_output_tokens(&self.settings.model);
+                retained_output = Some(if says_nothing(&turn.content) {
+                    Vec::new()
+                } else {
+                    turn.content
+                });
+                repeat_request = Some(TurnRequest {
+                    max_tokens,
+                    ..sent_request
+                });
+                self.rebuild = Some("output setting changed".into());
+                self.log("RETRY", || format!("max_output_tokens; retrying the same request once with output budget {max_tokens} (0: provider limit)"));
+                self.emit(
+                    &events,
+                    AgentEvent::Retrying {
+                        seconds: 0,
+                        code: "ai.error.output_limit".into(),
+                        discard_partial: true,
+                    },
+                )
+                .await;
+                continue;
+            }
+            if let Some(partial) = retained_output.take() {
+                crate::stream_recovery::retain(partial, &mut turn);
+                for block in &turn.content {
+                    if let ContentBlock::Text { text } = block {
+                        self.emit(&events, AgentEvent::Text { text: text.clone() })
+                            .await;
+                    }
+                }
+            }
+            let truncated = turn.stop_reason == StopReason::MaxTokens;
+            if truncated {
+                if says_nothing(&turn.content) {
+                    empty_continuations += 1;
+                } else {
+                    empty_continuations = 0;
+                }
+                if empty_continuations > 1 {
+                    return Err(AiError::Incomplete {
+                        provider: "other".into(),
+                        reason: "max_output_tokens".into(),
+                    });
+                }
+            } else {
+                output_retried = false;
+                empty_continuations = 0;
+            }
             let gate = if matches!(turn.stop_reason, StopReason::EndTurn)
                 && !says_nothing(&turn.content)
             {
@@ -1177,7 +1306,7 @@ impl Agent {
                 }
                 // With no call to answer (all were in a declined attempt before a fallback), an
                 // empty user message would be refused, so the turn ends below instead.
-                StopReason::ToolUse if has_calls(&turn.content) => {
+                StopReason::ToolUse | StopReason::MaxTokens if has_calls(&turn.content) => {
                     let assistant = Message::assistant(turn.content);
                     self.history.push(assistant.clone());
                     self.history.push(Message::user(Vec::new()));
@@ -1206,6 +1335,13 @@ impl Agent {
                             .await;
                         return Ok(());
                     }
+                    if truncated {
+                        self.push_user(vec![ContentBlock::Text {
+                            text: crate::stream_recovery::continuation(
+                                self.chat_language == Lang::Ar,
+                            ),
+                        }]);
+                    }
                 }
                 // Once per turn, supply factual open-phase context.
                 StopReason::EndTurn if gate.is_some() => {
@@ -1223,28 +1359,44 @@ impl Agent {
                     )
                     .await;
                 }
-                // Cut off before it said or called anything: its room went on thinking (Gemini
-                // through Runware once thought for 94 s and wrote nothing). Nothing ran, so the
-                // same request goes again with twice the room; the cut-off answer is dropped.
-                StopReason::MaxTokens
-                    if !self.provider.owns_turn()
-                        && says_nothing(&turn.content)
-                        && max_tokens < MAX_TOKENS_CAP =>
-                {
-                    max_tokens = (max_tokens.max(1) * 2).min(MAX_TOKENS_CAP);
-                    self.rebuild = Some("output setting changed".into());
-                    self.log("RETRY", || {
-                        format!("the answer was cut off before it said anything; asking again with max_tokens {max_tokens}")
-                    });
+                StopReason::MaxTokens if self.provider.owns_turn() => {
+                    return self.stop(&events, "max_tokens").await
+                }
+                StopReason::MaxTokens => {
+                    if !turn.content.is_empty() && !says_nothing(&turn.content) {
+                        self.history.push(Message::assistant(turn.content));
+                    }
+                    self.push_user(vec![ContentBlock::Text {
+                        text: crate::stream_recovery::continuation(self.chat_language == Lang::Ar),
+                    }]);
                     self.emit(
                         &events,
                         AgentEvent::Retrying {
                             seconds: 0,
                             code: "ai.error.output_limit".into(),
-                            discard_partial: true,
+                            discard_partial: false,
                         },
                     )
                     .await;
+                }
+                StopReason::Incomplete { provider, reason } => {
+                    let assistant = Message::assistant(turn.content);
+                    let unrun = assistant
+                        .tool_uses()
+                        .map(|(id, _, _)| {
+                            error_result(id, "Not run: the provider stopped the response.")
+                        })
+                        .collect::<Vec<_>>();
+                    if !assistant.content.is_empty() {
+                        self.history.push(assistant);
+                    }
+                    if !unrun.is_empty() {
+                        self.history.push(Message::user(unrun));
+                    }
+                    self.update_checkpoint();
+                    let error = AiError::Incomplete { provider, reason };
+                    self.log("ERROR", || error.to_string());
+                    return Err(error);
                 }
                 reason => {
                     let assistant = Message::assistant(turn.content);
@@ -1367,6 +1519,7 @@ impl Agent {
         request_number: usize,
         events: &mpsc::Sender<AgentEvent>,
         cancel: &CancellationToken,
+        buffer_output: bool,
     ) -> Option<Result<crate::provider::TurnResult, AiError>> {
         let request_summary = format!(
             "{} messages, {} tools, model {}, effort {}",
@@ -1449,6 +1602,9 @@ impl Agent {
                         }
                     }
                     StreamEvent::TextDelta(text) => {
+                        if buffer_output {
+                            continue;
+                        }
                         if self.provider.owns_turn() {
                             self.log("TEXT", || clip(&text));
                         }
@@ -1459,6 +1615,9 @@ impl Agent {
                         AgentEvent::Text { text }
                     }
                     StreamEvent::Thinking(text) => {
+                        if buffer_output {
+                            continue;
+                        }
                         streamed = true;
                         AgentEvent::Thinking { text }
                     }
@@ -4127,6 +4286,73 @@ mod provider_failure_tests {
             .contains("Keep my drawing unchanged."));
     }
 
+    #[tokio::test]
+    async fn temporary_failure_after_a_tool_retries_within_the_turn_without_recounting_usage() {
+        struct Temporary(Arc<AtomicUsize>);
+        impl Provider for Temporary {
+            fn stream_turn<'a>(
+                &'a self,
+                _req: TurnRequest,
+                _sink: Sink<'a>,
+            ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+                let attempt = self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    match attempt {
+                        0 => Ok(TurnResult {
+                            content: vec![ContentBlock::ToolUse {
+                                id: "read".into(),
+                                name: "qiyas_read".into(),
+                                input: json!({"op":"state","args":"{}"}),
+                            }],
+                            stop_reason: StopReason::ToolUse,
+                            usage: Usage {
+                                output_tokens: 7,
+                                ..Usage::default()
+                            },
+                        }),
+                        1 => Err(AiError::Subscription("chatgpt_temporary")),
+                        _ => Ok(TurnResult {
+                            content: vec![],
+                            stop_reason: StopReason::EndTurn,
+                            usage: Usage {
+                                output_tokens: 11,
+                                ..Usage::default()
+                            },
+                        }),
+                    }
+                })
+            }
+        }
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut agent = Agent::new(
+            Box::new(Temporary(attempts.clone())),
+            Arc::new(Mutex::new(None)),
+            AgentSettings::default(),
+        );
+        let (tx, mut rx) = mpsc::channel(100);
+        agent
+            .run_turn(
+                "Continue the terminal sheets".into(),
+                tx,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        let mut total = 0;
+        let mut retries = 0;
+        let mut calls = 0;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::Done { usage } => total = usage.output_tokens,
+                AgentEvent::Retrying { seconds: 5, .. } => retries += 1,
+                AgentEvent::ToolCall { .. } => calls += 1,
+                _ => {}
+            }
+        }
+        assert_eq!((total, retries, calls), (18, 1, 1));
+    }
+
     struct ThinkingLimit(Arc<AtomicUsize>);
     impl Provider for ThinkingLimit {
         fn stream_turn<'a>(
@@ -4147,7 +4373,7 @@ mod provider_failure_tests {
                         usage: Usage::default(),
                     })
                 } else {
-                    assert_eq!(req.max_tokens, 200);
+                    assert_eq!(req.max_tokens, MAX_TOKENS_CAP);
                     Ok(TurnResult {
                         content: vec![],
                         stop_reason: StopReason::EndTurn,

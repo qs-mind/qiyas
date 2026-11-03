@@ -1011,12 +1011,14 @@ async fn first_account_model_is_automatic_and_effort_requires_explicit_model_sup
         "registration".into(),
         vec![
             PlanModel {
+                max_output_tokens: Some(131_072),
                 image_input: None,
                 id: "first".into(),
                 label: "First".into(),
                 reasoning_efforts: vec!["low".into(), "high".into()],
             },
             PlanModel {
+                max_output_tokens: None,
                 image_input: None,
                 id: "plain".into(),
                 label: "Plain".into(),
@@ -1047,6 +1049,22 @@ async fn first_account_model_is_automatic_and_effort_requires_explicit_model_sup
         .await
         .unwrap();
     assert_eq!(req.effort, "none");
+    req.max_tokens = 0;
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(req.max_tokens, 131_072);
+    req.model = "plain".into();
+    req.max_tokens = 0;
+    provider
+        .configure("registration", &tokens(&[PLAN_SCOPE]), &mut req)
+        .await
+        .unwrap();
+    assert_eq!(
+        req.max_tokens, 0,
+        "unknown plan limits belong to the provider"
+    );
 }
 
 #[test]
@@ -1110,6 +1128,7 @@ fn model_picture_metadata_belongs_to_the_account_provider() {
         *provider.models.lock().unwrap() = Some((
             "registration".into(),
             vec![PlanModel {
+                max_output_tokens: None,
                 id: "picture-model".into(),
                 label: "Model".into(),
                 image_input: Some(supported),

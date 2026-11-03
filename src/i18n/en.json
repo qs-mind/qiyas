@@ -2075,6 +2075,8 @@
   "ai.error.chatgpt_reauthorize": "Your ChatGPT connection expired. Continue with ChatGPT in Settings to reconnect. Your drawing work so far is kept.",
   "ai.error.chatgpt_account_mismatch": "This sign-in belongs to a different account. Choose Add an account in Settings. Your drawing work so far is kept.",
   "ai.error.chatgpt_revocation_unconfirmed": "Signed out on this device. ChatGPT could not confirm disconnection; remove Qiyas in ChatGPT settings. Your drawing work so far is kept.",
+  "ai.error.stream_parse": "Qiyas could not parse the AI response. This is a stream format error; your completed drawing work is kept.",
+  "ai.error.response_incomplete": "The AI response stopped before completion. Your completed drawing work is kept.",
   "ai.error.chatgpt_incomplete": "ChatGPT stopped before finishing its answer. Your drawing work so far is kept. Continue picks up where Mizan stopped.",
   "ai.error.chatgpt_failed": "ChatGPT stopped answering. Your drawing work so far is kept. Continue picks up where Mizan stopped.",
   "takeoff.note": "Note",

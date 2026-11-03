@@ -221,6 +221,17 @@ fn window_failure(provider: &str, envelope: &str) -> Option<PublicError> {
     error.failure = qiyas_ai::provider_error::ProviderFailure::from_code(code, provider);
     error.failure.resets_at = value.get("resets_at").and_then(serde_json::Value::as_u64);
     error.failure.retry_after = value.get("retry_after").and_then(serde_json::Value::as_u64);
+    if let Some(reason) = value
+        .pointer("/details/reason")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 80
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
+    {
+        error.failure.details = Some(serde_json::json!({"reason":reason}));
+    }
     Some(error)
 }
 
@@ -360,6 +371,15 @@ mod tests {
             .any(|action| action.page == Some("openai_billing")));
         assert!(window_failure("openai", "raw error containing credentials").is_none());
         assert!(window_failure("openai", r#"{"code":"ai.error.secret credential"}"#).is_none());
+    }
+    #[test]
+    fn incomplete_reason_survives_the_saved_failure_model() {
+        let error = window_failure(
+            "chatgpt_plan",
+            r#"{"code":"ai.error.content_filter","details":{"reason":"content_filter"}}"#,
+        )
+        .unwrap();
+        assert_eq!(error.failure.details.unwrap()["reason"], "content_filter");
     }
     #[test]
     fn discovery_tracks_only_the_saved_selected_provider_without_a_draft_key() {

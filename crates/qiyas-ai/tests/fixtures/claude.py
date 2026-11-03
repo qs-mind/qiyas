@@ -47,6 +47,11 @@ elif args == ["auth", "--help"]:
 elif args == ["auth", "status"]:
     print(json.dumps({"loggedIn": True}))
 elif "-p" in args:
+    if scenario.get("attempts"):
+        counter = root / "attempt-count"
+        attempt = int(counter.read_text()) if counter.exists() else 0
+        counter.write_text(str(attempt + 1))
+        scenario.update(scenario["attempts"][min(attempt, len(scenario["attempts"]) - 1)])
     user_input = json.loads(sys.stdin.readline())
     record({"input": user_input})
     if scenario.get("refuse_images") and any(block.get("type") == "image" for block in user_input["message"]["content"]):

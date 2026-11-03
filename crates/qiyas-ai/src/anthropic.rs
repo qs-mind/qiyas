@@ -50,6 +50,9 @@ impl Anthropic {
 }
 
 impl Provider for Anthropic {
+    fn handles_temporary_retries(&self) -> bool {
+        !self.strict_budget
+    }
     fn image_input(&self, model: &str) -> Option<bool> {
         crate::models::known_image_input(&self.url, model)
     }
@@ -115,7 +118,8 @@ impl Provider for Anthropic {
             // header value can only be refused.
             let mut key = HeaderValue::from_str(&self.api_key).map_err(|_| AiError::Auth)?;
             key.set_sensitive(true);
-            let started = tokio::time::Instant::now();
+            let mut started = None;
+            let mut interrupted_usage = Usage::default();
             let mut backoff = crate::provider::RetryBackoff::default();
             loop {
                 let response = send_with_retry(
@@ -149,17 +153,20 @@ impl Provider for Anthropic {
                         &error,
                         !self.strict_budget,
                         &mut backoff,
-                        started,
+                        &mut started,
                         sink,
                         true,
                     )
                     .await
                     {
+                        interrupted_usage.add(turn.usage);
                         continue;
                     }
                     return Err(error);
                 }
-                return Ok(turn.finish());
+                let mut result = turn.finish();
+                result.usage.add(interrupted_usage);
+                return Ok(result);
             }
         })
     }
@@ -324,7 +331,10 @@ impl Turn {
     /// Handles one event's data; `Ok(true)` once the message has stopped.
     fn on_event(&mut self, data: &str, sink: Sink<'_>) -> Result<bool, AiError> {
         let Ok(e) = serde_json::from_str::<Value>(data) else {
-            return Err(AiError::Stream("an event was not valid JSON".into()));
+            return Err(AiError::Parse {
+                provider: "anthropic",
+                detail: "invalid event JSON",
+            });
         };
         let index = e["index"].as_u64().unwrap_or(0) as usize;
         match e["type"].as_str().unwrap_or("") {
@@ -397,6 +407,12 @@ impl Turn {
             "message_delta" => {
                 if let Some(r) = e["delta"]["stop_reason"].as_str() {
                     self.stop_reason = Some(r.to_string());
+                    if matches!(r, "length" | "max_tokens" | "content_filter") {
+                        sink(StreamEvent::Diagnostic {
+                            kind: "RESPONSE INCOMPLETE".into(),
+                            text: format!("anthropic: {r}"),
+                        });
+                    }
                 }
                 let details = &e["delta"]["stop_details"];
                 self.stop_details = if details.is_null() {
@@ -407,6 +423,11 @@ impl Turn {
                 self.read_usage(&e["usage"]);
             }
             "message_stop" => {
+                if self.stop_reason.is_none() {
+                    return Err(AiError::Stream(
+                        "connection closed without stop_reason".into(),
+                    ));
+                }
                 sink(StreamEvent::Done);
                 return Ok(true);
             }
@@ -450,14 +471,27 @@ impl Turn {
         let open: Vec<usize> = self.building.keys().copied().collect();
         for index in open {
             if let Some(b) = self.building.remove(&index) {
+                if self.stop_reason.as_deref() == Some("max_tokens")
+                    && matches!(b, Building::ToolUse { .. } | Building::Thinking { .. })
+                {
+                    continue;
+                }
                 self.done.insert(index, finish_block(b, &mut |_| {}));
             }
         }
-        let content: Vec<ContentBlock> = self.done.into_values().collect();
+        let content: Vec<ContentBlock> = self
+            .done
+            .into_values()
+            .filter(|b| {
+                self.stop_reason.as_deref() != Some("max_tokens")
+                    || !matches!(b, ContentBlock::ToolUse { input, .. } if !input.is_object())
+            })
+            .collect();
         let stop_reason = match self.stop_reason.as_deref() {
             Some("end_turn") | Some("stop_sequence") | None => StopReason::EndTurn,
             Some("tool_use") => StopReason::ToolUse,
-            Some("max_tokens") => StopReason::MaxTokens,
+            Some("max_tokens") => crate::stream_recovery::stop("anthropic", "max_tokens"),
+            Some("content_filter") => crate::stream_recovery::stop("anthropic", "content_filter"),
             Some("refusal") => {
                 let explanation = self.stop_details["explanation"].as_str().unwrap_or("");
                 let text = if explanation.is_empty() {
@@ -703,5 +737,46 @@ mod tests {
             .collect();
         assert_eq!(types, ["text", "fallback", "tool_use"]);
         assert_eq!(sent["content"][2]["id"], "new");
+    }
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::*;
+
+    #[test]
+    fn max_tokens_keeps_closed_calls_and_text_and_counts_usage_once() {
+        let mut turn = Turn::default();
+        for event in [
+            json!({"type":"message_start","message":{"usage":{"input_tokens":100}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"finished","name":"qiyas_read"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"op\":\"state\",\"args\":\"{}\"}"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":"Sheets next"}}),
+            json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"unfinished","name":"qiyas_execute"}}),
+            json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"op\":"}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":23}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":23}}),
+            json!({"type":"message_stop"}),
+        ] {
+            turn.on_event(&event.to_string(), &mut |_| {}).unwrap();
+        }
+        let result = turn.finish();
+        assert_eq!(result.stop_reason, StopReason::MaxTokens);
+        assert_eq!(result.usage.output_tokens, 23);
+        assert_eq!(result.usage.total_input(), 100);
+        let message = Message::assistant(result.content);
+        assert_eq!(message.tool_uses().count(), 1);
+        assert!(message
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text == "Sheets next")));
+    }
+
+    #[test]
+    fn malformed_json_has_its_own_code() {
+        let error = Turn::default().on_event("{", &mut |_| {}).unwrap_err();
+        assert_eq!(error.code(), "stream_parse");
+        assert!(!error.retryable());
     }
 }

@@ -7,9 +7,11 @@ use super::*;
 pub(in crate::chatgpt_plan) struct Events {
     pub(super) unsupported: Option<String>,
     pub(super) result: Option<TurnResult>,
+    pub(super) observed_usage: Usage,
     items: BTreeMap<usize, Value>,
     ids: HashMap<String, usize>,
     announced: HashSet<String>,
+    finished: HashSet<usize>,
     emitted: HashMap<(usize, usize), String>,
     tokens: Option<Tokens>,
     pub(super) account_id: Option<String>,
@@ -79,7 +81,7 @@ impl Events {
         sink: Sink<'_>,
     ) -> Result<(), AiError> {
         if !item.is_object() || item.get("content").is_some_and(|v| !v.is_array()) {
-            return Err(AiError::Subscription("chatgpt_incomplete"));
+            return Err(parse_error());
         }
         let index = self.index(event, &item, completed);
         let stored = self.items.entry(index).or_insert(Value::Null);
@@ -94,6 +96,11 @@ impl Events {
                     stored[key] = value.clone();
                 }
             }
+        }
+        if item["status"] == "incomplete" {
+            self.finished.remove(&index);
+        } else if completed || event["type"] == "response.output_item.done" {
+            self.finished.insert(index);
         }
         self.announce(index, sink);
         self.text(index, sink);
@@ -174,18 +181,19 @@ impl Events {
                 let entry = self.items.entry(index).or_insert(item);
                 let content = entry
                     .as_object_mut()
-                    .ok_or(AiError::Subscription("chatgpt_incomplete"))?
+                    .ok_or(parse_error())?
                     .entry("content")
                     .or_insert(json!([]));
-                let parts = content
-                    .as_array_mut()
-                    .ok_or(AiError::Subscription("chatgpt_incomplete"))?;
+                let parts = content.as_array_mut().ok_or(parse_error())?;
                 let part = value["content_index"].as_u64().unwrap_or(0) as usize;
                 if part > 4096 {
-                    return Err(AiError::Subscription("chatgpt_incomplete"));
+                    return Err(parse_error());
                 }
                 parts.resize(parts.len().max(part + 1), Value::Null);
                 if value.get("part").is_some() {
+                    if !value["part"].is_object() {
+                        return Err(parse_error());
+                    }
                     fill(&mut parts[part], &value["part"]);
                 } else {
                     let refusal = value["type"].as_str().unwrap_or("").contains("refusal");
@@ -193,6 +201,9 @@ impl Events {
                     if parts[part].is_null() {
                         parts[part] =
                             json!({"type": if refusal {"refusal"} else {"output_text"}, field:""});
+                    }
+                    if !parts[part].is_object() {
+                        return Err(parse_error());
                     }
                     if let Some(delta) = value["delta"].as_str() {
                         let mut text = parts[part][field].as_str().unwrap_or("").to_owned();
@@ -229,20 +240,39 @@ impl Events {
                     }
                 } else if let Some(args) = value.get("arguments") {
                     fill(&mut entry["arguments"], args);
+                    self.finished.insert(index);
                 }
             }
-            "response.incomplete" => return Err(AiError::Subscription("chatgpt_incomplete")),
-            "response.completed" => {
+            "response.incomplete" | "response.completed" => {
+                if self.result.is_some() {
+                    return Ok(true);
+                }
+                let incomplete = value["type"] == "response.incomplete";
+                let reason = crate::stream_recovery::reason(
+                    value
+                        .pointer("/response/incomplete_details/reason")
+                        .and_then(Value::as_str),
+                );
+                if incomplete {
+                    sink(StreamEvent::Diagnostic {
+                        kind: "RESPONSE INCOMPLETE".into(),
+                        text: format!("ChatGPT: {reason}"),
+                    });
+                }
                 self.finalizing = true;
                 self.emit_thinking(sink);
                 let response = &value["response"];
+                if response.get("output").is_some_and(|v| !v.is_array()) {
+                    return Err(parse_error());
+                }
                 for (index, item) in response["output"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .enumerate()
                 {
-                    self.merge_item(&json!({"output_index":index}), item.clone(), true, sink)?;
+                    let finished = !incomplete || item["status"] == "completed";
+                    self.merge_item(&json!({"output_index":index}), item.clone(), finished, sink)?;
                 }
                 for index in self.items.keys().copied().collect::<Vec<_>>() {
                     self.text(index, sink);
@@ -258,7 +288,7 @@ impl Events {
                 });
                 let mut content = Vec::new();
                 let mut refused = None;
-                for item in self.items.values() {
+                for (index, item) in &self.items {
                     match item["type"].as_str().unwrap_or("") {
                         "message" => {
                             for block in item["content"].as_array().into_iter().flatten() {
@@ -277,18 +307,26 @@ impl Events {
                                 }
                             }
                         }
-                        "reasoning" => content.push(ContentBlock::Raw(item.clone())),
+                        "reasoning" if !incomplete || self.finished.contains(index) => {
+                            content.push(ContentBlock::Raw(item.clone()))
+                        }
                         "function_call" => {
+                            if incomplete && !self.finished.contains(index) {
+                                continue;
+                            }
                             let id = item["call_id"]
                                 .as_str()
                                 .filter(|s| !s.is_empty())
-                                .ok_or(AiError::Subscription("chatgpt_incomplete"))?;
+                                .ok_or(parse_error())?;
                             let name = item["name"]
                                 .as_str()
                                 .filter(|s| !s.is_empty())
-                                .ok_or(AiError::Subscription("chatgpt_incomplete"))?;
+                                .ok_or(parse_error())?;
                             let raw = self.clean(item["arguments"].as_str().unwrap_or(""));
                             let input = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
+                            if incomplete && !input.is_object() {
+                                continue;
+                            }
                             sink(StreamEvent::ToolUse {
                                 id: id.into(),
                                 name: name.into(),
@@ -319,7 +357,9 @@ impl Events {
                         .unwrap_or(0),
                     ..Usage::default()
                 };
-                if refused.is_none()
+                self.observed_usage = usage;
+                if !incomplete
+                    && refused.is_none()
                     && !content.iter().any(|c| {
                         matches!(c, ContentBlock::Text{text} if !text.trim().is_empty())
                             || matches!(c, ContentBlock::ToolUse { .. })
@@ -334,7 +374,9 @@ impl Events {
                     });
                     return Err(AiError::Subscription("chatgpt_empty"));
                 }
-                let stop_reason = if let Some(text) = refused {
+                let stop_reason = if incomplete {
+                    crate::stream_recovery::stop("chatgpt_plan", &reason)
+                } else if let Some(text) = refused {
                     StopReason::Refusal {
                         category: None,
                         text,
@@ -424,4 +466,11 @@ fn safe_text(text: &str, tokens: Option<&Tokens>, finalizing: bool) -> String {
         })
         .unwrap_or(clean.len());
     clean[..boundary].into()
+}
+
+fn parse_error() -> AiError {
+    AiError::Parse {
+        provider: "chatgpt_plan",
+        detail: "invalid response item",
+    }
 }

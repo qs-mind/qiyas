@@ -39,6 +39,16 @@ pub trait Provider: Send + Sync {
                 .map(|_| true)
         })
     }
+    /// Whether transport retries are already bounded inside this adapter.
+    fn handles_temporary_retries(&self) -> bool {
+        false
+    }
+
+    /// Largest advertised output budget; zero means the provider chooses its own limit.
+    fn recovery_output_tokens(&self, _model: &str) -> u32 {
+        crate::agent::MAX_TOKENS_CAP
+    }
+
     /// A local agent owns its tool loop; generic retries must not restart it.
     fn owns_turn(&self) -> bool {
         false
@@ -229,6 +239,11 @@ pub enum StopReason {
     EndTurn,
     ToolUse,
     MaxTokens,
+    /// A terminal provider stop, distinct from a broken connection or a parse bug.
+    Incomplete {
+        provider: String,
+        reason: String,
+    },
     /// The model or a safety classifier declined. `category` is `stop_details.category` (e.g.
     /// "cyber"), which may be absent; `text` is its explanation, or what was written before.
     Refusal {
@@ -278,6 +293,18 @@ pub struct TurnResult {
 /// Errors from a provider. None of them ever holds the API key.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AiError {
+    #[error("{provider} stream interrupted before its terminal event")]
+    Interrupted {
+        provider: &'static str,
+        partial: Box<TurnResult>,
+    },
+    #[error("{provider} response incomplete: {reason}")]
+    Incomplete { provider: String, reason: String },
+    #[error("Malformed {provider} stream: {detail}")]
+    Parse {
+        provider: &'static str,
+        detail: &'static str,
+    },
     /// A scrubbed eligibility/consent refusal from OpenAI, shown in its own words.
     #[error("ChatGPT: {0}")]
     ChatgptDenied(String),
@@ -482,12 +509,19 @@ pub(crate) async fn retry_stream(
     error: &AiError,
     allow_retry: bool,
     backoff: &mut RetryBackoff,
-    started: tokio::time::Instant,
+    started: &mut Option<tokio::time::Instant>,
     sink: Sink<'_>,
     discard_partial: bool,
 ) -> bool {
     let delay = (allow_retry && error.retryable())
-        .then(|| backoff.next_delay(None, started.elapsed()))
+        .then(|| {
+            backoff.next_delay(
+                None,
+                started
+                    .get_or_insert_with(tokio::time::Instant::now)
+                    .elapsed(),
+            )
+        })
         .flatten();
     let Some(delay) = delay else { return false };
     sink(StreamEvent::Retrying {
@@ -699,11 +733,11 @@ pub(crate) async fn read_events(
     let mut events = std::pin::pin!(event_stream(chunks));
     while let Some(event) = events.next().await {
         let event = event.map_err(|error| match error {
-            eventsource_stream::EventStreamError::Transport(error) => match network(error) {
-                AiError::Network(message) => AiError::Stream(message),
-                other => other,
+            eventsource_stream::EventStreamError::Transport(error) => network(error),
+            _ => AiError::Parse {
+                provider: "other",
+                detail: "invalid server-sent event",
             },
-            error => AiError::Stream(error.to_string()),
         })?;
         if on_event(event)? {
             return Ok(());

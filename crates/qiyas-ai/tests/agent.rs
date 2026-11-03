@@ -785,7 +785,7 @@ async fn an_answer_cut_off_before_it_said_anything_is_asked_again_with_more_room
         let reqs = mock.requests();
         assert_eq!(reqs.len(), 2, "asked again");
         assert_eq!(reqs[0].body["max_tokens"], 16_000);
-        assert_eq!(reqs[1].body["max_tokens"], 32_000, "with twice the room");
+        assert_eq!(reqs[1].body["max_tokens"], 64_000, "with the recovery budget");
         assert_eq!(
             reqs[1].body["messages"].as_array().unwrap().len(),
             1,
@@ -816,19 +816,14 @@ async fn an_answer_that_keeps_running_out_stops_at_the_cap() {
             session,
             AgentSettings::default(),
         );
-        let (_result, events) = turn(&mut agent, "Draw the terminal.").await;
+        let (result, _events) = turn(&mut agent, "Draw the terminal.").await;
         let sizes: Vec<_> = mock
             .requests()
             .iter()
             .map(|r| r.body["max_tokens"].clone())
             .collect();
-        assert_eq!(sizes, [16_000, 32_000, 64_000]);
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::Stopped { reason } if reason == "max_tokens")),
-            "{events:?}"
-        );
+        assert_eq!(sizes, [16_000, 64_000, 64_000]);
+        assert!(matches!(result, Err(qiyas_ai::AiError::Incomplete { reason, .. }) if reason == "max_output_tokens"));
     })
     .await
     .expect("test an_answer_that_keeps_running_out_stops_at_the_cap timed out after 60 seconds");
@@ -2451,4 +2446,46 @@ async fn unknown_picture_support_sends_attached_photo_then_retries_a_refusal_as_
         assert_eq!(cache.get(&key), Some(false));
         assert_eq!(qiyas_ai::pictures::Cache::new(path).get(&key), Some(false));
     }).await.expect("test unknown_picture_support_sends_attached_photo_then_retries_a_refusal_as_text timed out after 60 seconds");
+}
+
+#[tokio::test]
+async fn a_broken_api_stream_retries_and_counts_each_reported_usage_snapshot_once() {
+    let mock = serve(|attempt| {
+        let mut data = vec![
+            json!({"choices":[{"delta":{"content":"Terminal sheets"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":23}}).to_string(),
+            json!({"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":23}}).to_string(),
+        ];
+        if attempt > 0 { data.push("[DONE]".into()); }
+        Reply::Data(data)
+    }).await;
+    let provider = OpenAiCompatible::new(&mock.base, None);
+    let req = TurnRequest {
+        cache_key: "stream-recovery".into(),
+        system: "Mizan".into(),
+        model: "mock".into(),
+        effort: "none".into(),
+        max_tokens: 100,
+        tools: qiyas_ai::catalogue(),
+        messages: vec![qiyas_ai::Message::user(vec![
+            qiyas_ai::ContentBlock::Text {
+                text: "Continue the terminal sheets".into(),
+            },
+        ])],
+    };
+    let mut events = Vec::new();
+    let result = provider
+        .stream_turn(req, &mut |event| events.push(event))
+        .await
+        .unwrap();
+    assert_eq!(mock.requests().len(), 2);
+    assert_eq!(result.usage.output_tokens, 46);
+    assert_eq!(result.usage.total_input(), 200);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::Retrying {
+            seconds: 5,
+            discard_partial: true,
+            ..
+        }
+    )));
 }

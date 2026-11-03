@@ -38,6 +38,8 @@ pub struct ProviderFailure {
     pub resets_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
     pub actions: Vec<FailureAction>,
 }
 
@@ -107,6 +109,7 @@ impl ProviderFailure {
             provider: provider.into(),
             resets_at: None,
             retry_after: None,
+            details: None,
             actions,
         }
     }
@@ -199,6 +202,14 @@ pub(crate) fn reset_timestamp(detail: &Value) -> Option<u64> {
 impl AiError {
     pub fn code(&self) -> &'static str {
         match self {
+            Self::Interrupted {
+                provider: "claude_code",
+                ..
+            } => "claude_stream",
+            Self::Interrupted { .. } => "stream",
+            Self::Incomplete { reason, .. } if reason == "content_filter" => "content_filter",
+            Self::Incomplete { .. } => "response_incomplete",
+            Self::Parse { .. } => "stream_parse",
             Self::ChatgptDenied(_) => "chatgpt_denied",
             Self::Subscription(code) | Self::SubscriptionFailure { code, .. } => code,
             Self::ModelNotFound { .. } => "model_not_found",
@@ -244,6 +255,16 @@ impl AiError {
         }
         let mut public = public_error(self.code());
         match self {
+            Self::Incomplete { provider, reason } => {
+                public.failure.provider.clone_from(provider);
+                public.failure.details = Some(serde_json::json!({"reason": reason}));
+                public.message = format!("The AI response stopped: {reason}.");
+                public.message_ar = format!("توقفت إجابة المساعد: {reason}.");
+            }
+            Self::Parse { provider, detail } => {
+                public.failure.provider = (*provider).into();
+                public.failure.details = Some(serde_json::json!({"parse_error": detail}));
+            }
             Self::SubscriptionFailure {
                 resets_at,
                 retry_after,
@@ -263,6 +284,7 @@ impl AiError {
         let mut failure = ProviderFailure::from_code(self.code(), provider);
         failure.resets_at = public.failure.resets_at;
         failure.retry_after = public.failure.retry_after;
+        failure.details = public.failure.details.take();
         public.failure = failure;
         public
     }

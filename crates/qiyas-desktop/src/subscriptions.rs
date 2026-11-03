@@ -608,12 +608,14 @@ mod tests {
         let cached = Mutex::new(initial);
         let models = vec![
             PlanModel {
+                max_output_tokens: None,
                 image_input: None,
                 id: "first-plan-model".into(),
                 label: "First model".into(),
                 reasoning_efforts: vec!["low".into(), "high".into()],
             },
             PlanModel {
+                max_output_tokens: None,
                 image_input: None,
                 id: "second-plan-model".into(),
                 label: "Second model".into(),
@@ -657,6 +659,7 @@ mod tests {
         std::fs::write(&blocked, "test").unwrap();
         let cached = Mutex::new(Settings::default());
         let model = PlanModel {
+            max_output_tokens: None,
             image_input: None,
             id: "first-plan-model".into(),
             label: "First model".into(),

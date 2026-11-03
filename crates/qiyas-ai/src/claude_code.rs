@@ -426,6 +426,162 @@ impl ClaudeCode {
         self
     }
 
+    async fn execute_recovering(
+        &self,
+        mut req: TurnRequest,
+        cwd: &Path,
+        capabilities: &Capabilities,
+        config: Value,
+        permit: Arc<OwnedSemaphorePermit>,
+        sink: Sink<'_>,
+    ) -> Result<TurnResult, AiError> {
+        let mut backoff = crate::RetryBackoff::default();
+        let mut started = None;
+        let mut messages = HashMap::<String, Usage>::new();
+        let mut retained = Vec::new();
+        let mut seen_activity = HashSet::new();
+        let mut output_retried = false;
+        let mut empty = 0;
+        loop {
+            let known_messages = messages.keys().cloned().collect();
+            let remaining = self
+                .request_limit
+                .map(|limit| limit.saturating_sub(messages.len() as u32));
+            let result = self
+                .execute_once(
+                    req.clone(),
+                    cwd,
+                    capabilities,
+                    config.clone(),
+                    permit.clone(),
+                    &known_messages,
+                    remaining,
+                    &mut |event| {
+                        if let StreamEvent::Diagnostic { kind, text } = &event {
+                            if kind == "CLAUDE REQUEST USAGE" {
+                                if let Ok(v) = serde_json::from_str::<Value>(text) {
+                                    if let (Some(id), Ok(usage)) = (
+                                        v["id"].as_str(),
+                                        serde_json::from_value::<Usage>(v["usage"].clone()),
+                                    ) {
+                                        messages.insert(id.into(), usage);
+                                    }
+                                }
+                            }
+                        }
+                        if let StreamEvent::Activity(activity) = &event {
+                            let key = match activity.as_ref() {
+                                AgentEvent::ToolCall { id, .. } => Some((false, id.clone())),
+                                AgentEvent::ToolResult { id, .. } => Some((true, id.clone())),
+                                _ => None,
+                            };
+                            if key.is_some_and(|key| !seen_activity.insert(key)) {
+                                return;
+                            }
+                        }
+                        sink(event);
+                    },
+                )
+                .await;
+            let (mut partial, broken) = match result {
+                Ok(turn) if turn.stop_reason == StopReason::MaxTokens => (turn, false),
+                Err(AiError::Interrupted { partial, .. }) => (*partial, true),
+                Ok(mut turn) => {
+                    crate::stream_recovery::retain(retained, &mut turn);
+                    if !messages.is_empty() {
+                        turn.usage = Usage::default();
+                        for usage in messages.values() {
+                            turn.usage.add(*usage);
+                        }
+                    }
+                    return Ok(turn);
+                }
+                Err(error) => return Err(error),
+            };
+            if req.cache_key == "picture-support"
+                || self
+                    .session_id
+                    .lock()
+                    .map_err(|_| error("claude_unavailable"))?
+                    .is_none()
+            {
+                return Err(AiError::Interrupted {
+                    provider: "claude_code",
+                    partial: Box::new(partial),
+                });
+            }
+            if self
+                .request_limit
+                .is_some_and(|limit| messages.len() >= limit as usize)
+            {
+                return Err(AiError::Incomplete {
+                    provider: "claude_code".into(),
+                    reason: "request_limit".into(),
+                });
+            }
+            let delay = if broken {
+                let Some(delay) = backoff.next_delay(
+                    None,
+                    started
+                        .get_or_insert_with(tokio::time::Instant::now)
+                        .elapsed(),
+                ) else {
+                    return Err(AiError::Interrupted {
+                        provider: "claude_code",
+                        partial: Box::new(partial),
+                    });
+                };
+                delay
+            } else {
+                if partial.content.is_empty()
+                    || partial.content.iter().all(|block| retained.contains(block))
+                {
+                    empty += 1;
+                } else {
+                    empty = 0;
+                }
+                if empty > 1 {
+                    return Err(AiError::Incomplete {
+                        provider: "claude_code".into(),
+                        reason: "max_tokens".into(),
+                    });
+                }
+                if !output_retried {
+                    req.max_tokens = crate::agent::MAX_TOKENS_CAP;
+                    output_retried = true;
+                }
+                Duration::ZERO
+            };
+            retained.append(&mut partial.content);
+            sink(StreamEvent::Diagnostic {
+                kind: "CLAUDE RESUME".into(),
+                text: if broken {
+                    "claude_stream: resuming the existing session"
+                } else {
+                    "max_tokens: resuming with the larger output budget"
+                }
+                .into(),
+            });
+            sink(StreamEvent::Retrying {
+                seconds: delay.as_secs(),
+                code: if broken {
+                    "ai.error.claude_stream"
+                } else {
+                    "ai.error.output_limit"
+                }
+                .into(),
+                diagnostic: "Resume the existing Claude Code session; retain completed work."
+                    .into(),
+                discard_partial: false,
+            });
+            tokio::time::sleep(delay).await;
+            req.messages = vec![crate::Message::user(vec![ContentBlock::Text {
+                text: crate::stream_recovery::continuation(false),
+            }])];
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         req: TurnRequest,
@@ -433,6 +589,31 @@ impl ClaudeCode {
         capabilities: &Capabilities,
         config: Value,
         permit: Arc<OwnedSemaphorePermit>,
+        sink: Sink<'_>,
+    ) -> Result<TurnResult, AiError> {
+        self.execute_once(
+            req,
+            cwd,
+            capabilities,
+            config,
+            permit,
+            &HashSet::new(),
+            self.request_limit,
+            sink,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_once(
+        &self,
+        req: TurnRequest,
+        cwd: &Path,
+        capabilities: &Capabilities,
+        config: Value,
+        permit: Arc<OwnedSemaphorePermit>,
+        known_messages: &HashSet<String>,
+        request_limit: Option<u32>,
         sink: Sink<'_>,
     ) -> Result<TurnResult, AiError> {
         capabilities.validate()?;
@@ -471,11 +652,14 @@ impl ClaudeCode {
         ])
         .arg(&config.path)
         .args(["--append-system-prompt", &req.system]);
-        if let Some(limit) = self.request_limit.filter(|_| !probe) {
+        if let Some(limit) = request_limit.filter(|_| !probe) {
             if !capabilities.has("--max-turns") {
                 return Err(error("claude_flags"));
             }
             cmd.arg("--max-turns").arg(limit.to_string());
+        }
+        if !probe && req.max_tokens > 0 {
+            cmd.env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", req.max_tokens.to_string());
         }
         if probe {
             cmd.env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "1")
@@ -548,23 +732,36 @@ impl ClaudeCode {
             ));
             let mut reader = BufReader::new(stdout);
             let mut state = Events {
-                report_usage: self.request_limit.is_some(),
+                report_usage: true,
+                known_messages: known_messages.clone(),
                 ..Events::default()
             };
             loop {
                 let mut line = Vec::new();
                 // A bounded read prevents a malformed child stream exhausting memory.
-                let count = tokio::io::AsyncReadExt::take(&mut reader, 32 * 1024 * 1024 + 1)
+                let count = match tokio::io::AsyncReadExt::take(&mut reader, 32 * 1024 * 1024 + 1)
                     .read_until(b'\n', &mut line)
                     .await
-                    .map_err(|_| error("claude_stream"))?;
+                {
+                    Ok(count) => count,
+                    Err(_) => break,
+                };
                 if count == 0 {
                     break;
                 }
                 if line.len() > 32 * 1024 * 1024 {
-                    return Err(error("claude_stream"));
+                    return Err(AiError::Parse {
+                        provider: "claude_code",
+                        detail: "oversized stream item",
+                    });
                 }
-                let value = serde_json::from_slice(&line).map_err(|_| error("claude_stream"))?;
+                if !line.ends_with(b"\n") {
+                    break;
+                }
+                let value = serde_json::from_slice(&line).map_err(|_| AiError::Parse {
+                    provider: "claude_code",
+                    detail: "invalid event JSON",
+                })?;
                 if let Err(error) = state.read(value, sink) {
                     // Do not resume a transcript that still contains the rejected image.
                     if !probe && crate::pictures::image_refusal(&error) {
@@ -592,26 +789,22 @@ impl ClaudeCode {
                 }
             }
             if !state.finished {
-                return Err(error("claude_stream"));
+                return Err(AiError::Interrupted {
+                    provider: "claude_code",
+                    partial: Box::new(state.turn()),
+                });
             }
-            // Completion is a terminal protocol event; do not wait forever on a broken child.
+            // A terminal result remains valid even if the child fails while shutting down.
             let status = tokio::time::timeout(
                 Duration::from_secs(5),
                 running.child.as_mut().expect("running child").wait(),
             )
-            .await
-            .map_err(|_| error("claude_stream"))?
-            .map_err(|_| error("claude_stream"))?;
-            running.child.take();
-            if !status.success() {
-                return Err(error("claude_failed"));
+            .await;
+            if matches!(status, Ok(Ok(_))) {
+                running.child.take();
             }
             sink(StreamEvent::Done);
-            Ok(TurnResult {
-                content: vec![ContentBlock::Text { text: state.text }],
-                stop_reason: StopReason::EndTurn,
-                usage: state.usage,
-            })
+            Ok(state.turn())
         }
     }
 }
@@ -686,6 +879,9 @@ impl Drop for ServerLifetime {
 }
 
 impl Provider for ClaudeCode {
+    fn handles_temporary_retries(&self) -> bool {
+        true
+    }
     fn image_input(&self, _model: &str) -> Option<bool> {
         self.image_input.lock().ok().and_then(|value| *value)
     }
@@ -803,7 +999,8 @@ impl Provider for ClaudeCode {
             let mut forward = move |event| {
                 let _ = events_tx.send(event);
             };
-            let execute = self.execute(req, &cwd, &capabilities, config, permit, &mut forward);
+            let execute =
+                self.execute_recovering(req, &cwd, &capabilities, config, permit, &mut forward);
             tokio::pin!(execute);
             loop {
                 tokio::select! {
@@ -880,6 +1077,8 @@ fn user_content(req: &TurnRequest) -> Result<Vec<Value>, AiError> {
 #[derive(Default)]
 struct Events {
     report_usage: bool,
+    known_messages: HashSet<String>,
+    replayed: bool,
     text: String,
     message_streamed: bool,
     session_id: Option<String>,
@@ -888,6 +1087,8 @@ struct Events {
     partial_calls: HashMap<u64, PartialCall>,
     completed: HashSet<String>,
     usage: Usage,
+    message_usage: HashMap<String, Usage>,
+    stop_reason: Option<String>,
     finished: bool,
 }
 
@@ -919,6 +1120,25 @@ fn terminal_error(category: &str, detail: &Value) -> Option<AiError> {
 }
 
 impl Events {
+    fn turn(self) -> TurnResult {
+        TurnResult {
+            content: if self.text.is_empty() {
+                Vec::new()
+            } else {
+                vec![ContentBlock::Text { text: self.text }]
+            },
+            stop_reason: match self.stop_reason.as_deref() {
+                Some("max_tokens" | "max_output_tokens") => StopReason::MaxTokens,
+                Some("content_filter" | "refusal") => crate::stream_recovery::stop(
+                    "claude_code",
+                    self.stop_reason.as_deref().unwrap(),
+                ),
+                _ => StopReason::EndTurn,
+            },
+            usage: self.usage,
+        }
+    }
+
     fn call(
         &mut self,
         id: String,
@@ -979,9 +1199,21 @@ impl Events {
             }
             "stream_event" => {
                 let event = &value["event"];
+                if event["type"] == "message_delta" {
+                    self.stop_reason = event["delta"]["stop_reason"]
+                        .as_str()
+                        .map(|s| crate::stream_recovery::reason(Some(s)));
+                }
                 if event["type"] == "message_start" {
+                    self.replayed = event["message"]["id"]
+                        .as_str()
+                        .is_some_and(|id| self.known_messages.contains(id));
+                    self.stop_reason = None;
                     self.message_streamed = false;
                     self.partial_calls.clear();
+                }
+                if self.replayed {
+                    return Ok(());
                 }
                 if event["type"] == "content_block_start"
                     && event["content_block"]["type"] == "tool_use"
@@ -991,10 +1223,14 @@ impl Events {
                     if !TOOLS.contains(&name) {
                         return Err(error("claude_tool"));
                     }
-                    let index = event["index"]
-                        .as_u64()
-                        .ok_or_else(|| error("claude_stream"))?;
-                    let id = block["id"].as_str().ok_or_else(|| error("claude_stream"))?;
+                    let index = event["index"].as_u64().ok_or(AiError::Parse {
+                        provider: "claude_code",
+                        detail: "invalid tool item",
+                    })?;
+                    let id = block["id"].as_str().ok_or(AiError::Parse {
+                        provider: "claude_code",
+                        detail: "invalid tool item",
+                    })?;
                     self.partial_calls.insert(
                         index,
                         PartialCall {
@@ -1017,7 +1253,10 @@ impl Events {
                             .and_then(|index| self.partial_calls.get_mut(&index))
                         {
                             if call.arguments.len().saturating_add(delta.len()) > 32 * 1024 * 1024 {
-                                return Err(error("claude_stream"));
+                                return Err(AiError::Parse {
+                                    provider: "claude_code",
+                                    detail: "invalid tool item",
+                                });
                             }
                             call.arguments.push_str(delta);
                         }
@@ -1032,10 +1271,11 @@ impl Events {
                         let input = if call.arguments.is_empty() {
                             call.input
                         } else {
-                            serde_json::from_str(&call.arguments)
-                                .map_err(|_| error("claude_stream"))?
+                            serde_json::from_str(&call.arguments).unwrap_or(Value::Null)
                         };
-                        self.call(call.id, &call.name, input, sink)?;
+                        if input.is_object() {
+                            self.call(call.id, &call.name, input, sink)?;
+                        }
                     }
                 }
             }
@@ -1049,6 +1289,26 @@ impl Events {
                     return Err(
                         terminal_error(category, &value).unwrap_or_else(|| error("claude_failed"))
                     );
+                }
+                if let Some(reason) = value["message"]["stop_reason"].as_str() {
+                    self.stop_reason = Some(crate::stream_recovery::reason(Some(reason)));
+                }
+                if let Some(id) = value["message"]["id"].as_str() {
+                    let u = &value["message"]["usage"];
+                    let usage = Usage {
+                        input_tokens: u["input_tokens"].as_u64().unwrap_or(0),
+                        output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
+                        cache_read_input_tokens: u["cache_read_input_tokens"].as_u64().unwrap_or(0),
+                        cache_creation_input_tokens: u["cache_creation_input_tokens"]
+                            .as_u64()
+                            .unwrap_or(0),
+                        ..Usage::default()
+                    };
+                    self.message_usage.insert(id.into(), usage);
+                    self.usage = Usage::default();
+                    for usage in self.message_usage.values() {
+                        self.usage.add(*usage);
+                    }
                 }
                 if self.report_usage {
                     if let (Some(id), Some(usage)) = (
@@ -1070,6 +1330,16 @@ impl Events {
                         });
                     }
                 }
+                if value["message"]["id"]
+                    .as_str()
+                    .is_some_and(|id| self.known_messages.contains(id))
+                {
+                    self.message_streamed = false;
+                    return Ok(());
+                }
+                if let Some(id) = value["message"]["id"].as_str() {
+                    self.known_messages.insert(id.into());
+                }
                 for block in value["message"]["content"].as_array().into_iter().flatten() {
                     match block["type"].as_str().unwrap_or("") {
                         "text" if !self.message_streamed => {
@@ -1081,7 +1351,10 @@ impl Events {
                             let name = block["name"].as_str().unwrap_or("");
                             let id = block["id"]
                                 .as_str()
-                                .ok_or_else(|| error("claude_stream"))?
+                                .ok_or(AiError::Parse {
+                                    provider: "claude_code",
+                                    detail: "invalid tool item",
+                                })?
                                 .to_owned();
                             let input = block["input"].clone();
                             self.call(id, name, input, sink)?;
@@ -1196,6 +1469,113 @@ mod tests {
 
     const SESSION: &str = "6d22c32a-00da-4d6b-86b4-f13482078290";
     static TEST_PROCESS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn truncated_cli_resumes_the_session_and_deduplicates_message_usage() {
+        let _serial = TEST_PROCESS.lock().await;
+        let (dir, provider) = fixture(vec![]);
+        let first = json!({"type":"assistant","message":{"id":"first","stop_reason":"max_tokens","content":[{"type":"text","text":"Terminal plan ready."}],"usage":{"input_tokens":100,"output_tokens":23}}});
+        std::fs::write(dir.path().join("scenario.json"), json!({"help":help(),"attempts":[
+            {"events":[{"type":"system","subtype":"init","session_id":SESSION}, first, {"type":"result","subtype":"success","usage":{"input_tokens":100,"output_tokens":23}}]},
+            {"events":[first, {"type":"assistant","message":{"id":"second","stop_reason":"end_turn","content":[{"type":"text","text":"Sheets ready."}],"usage":{"input_tokens":120,"output_tokens":25}}}, {"type":"result","subtype":"success","usage":{"input_tokens":220,"output_tokens":48}}]}
+        ]}).to_string()).unwrap();
+        let result = provider
+            .execute_recovering(
+                request(),
+                dir.path(),
+                &Capabilities { help: help() },
+                config(),
+                permit(),
+                &mut |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.stop_reason, StopReason::EndTurn);
+        assert_eq!(result.usage.output_tokens, 48);
+        assert_eq!(result.usage.total_input(), 220);
+        let records = records(dir.path());
+        let calls = records
+            .iter()
+            .filter(|r| {
+                r["argv"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|v| v == "-p"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2);
+        assert!(!calls[0]["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "--resume"));
+        assert!(calls[1]["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "--resume"));
+        assert_eq!(
+            calls[1]["environment"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"],
+            crate::agent::MAX_TOKENS_CAP.to_string()
+        );
+        let inputs = records
+            .iter()
+            .filter_map(|r| r.get("input"))
+            .collect::<Vec<_>>();
+        assert!(inputs[1]
+            .to_string()
+            .contains("Do not repeat completed operations"));
+    }
+
+    #[tokio::test]
+    async fn broken_cli_stream_resumes_with_the_bounded_delay() {
+        let _serial = TEST_PROCESS.lock().await;
+        let (dir, provider) = fixture(vec![]);
+        std::fs::write(dir.path().join("scenario.json"), json!({"help":help(),"attempts":[
+            {"events":[{"type":"system","subtype":"init","session_id":SESSION},{"type":"assistant","message":{"id":"first","content":[{"type":"text","text":"Terminal plan ready."}],"usage":{"input_tokens":100,"output_tokens":23}}}]},
+            {"events":[{"type":"assistant","message":{"id":"second","stop_reason":"end_turn","content":[{"type":"text","text":"Sheets ready."}],"usage":{"input_tokens":120,"output_tokens":25}}},{"type":"result","subtype":"success","usage":{"input_tokens":120,"output_tokens":25}}]}
+        ]}).to_string()).unwrap();
+        let mut seen = Vec::new();
+        let result = provider
+            .execute_recovering(
+                request(),
+                dir.path(),
+                &Capabilities { help: help() },
+                config(),
+                permit(),
+                &mut |e| seen.push(e),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.usage.output_tokens, 48);
+        assert!(seen.iter().any(|e| matches!(
+            e,
+            StreamEvent::Retrying {
+                seconds: 5,
+                discard_partial: false,
+                ..
+            }
+        )));
+        assert_eq!(
+            records(dir.path())
+                .iter()
+                .filter(|r| r.get("input").is_some())
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn repeated_cli_messages_count_usage_once_and_parser_errors_are_distinct() {
+        let mut state = Events::default();
+        let message = json!({"type":"assistant","message":{"id":"one","stop_reason":"max_tokens","content":[],"usage":{"input_tokens":100,"output_tokens":23}}});
+        state.read(message.clone(), &mut |_| {}).unwrap();
+        state.read(message, &mut |_| {}).unwrap();
+        let turn = state.turn();
+        assert_eq!(turn.stop_reason, StopReason::MaxTokens);
+        assert_eq!(turn.usage.output_tokens, 23);
+        let error = Events::default().read(json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__qiyas__qiyas_read"}]}}), &mut |_| {}).unwrap_err();
+        assert_eq!(error.code(), "stream_parse");
+    }
 
     #[test]
     fn signal_pids_must_be_positive_and_fit_pid_t() {

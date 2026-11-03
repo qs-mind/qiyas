@@ -41,7 +41,8 @@ pub(super) async fn stream(
     let headers = request_headers(&req.cache_key, account_id.as_deref())?;
     let client = http_client();
     let mut retry = RetryBackoff::default();
-    let started = Instant::now();
+    let mut interrupted_usage = Usage::default();
+    let mut started = None;
     let mut adaptations = 0;
     loop {
         sink(scrub_http_event(
@@ -99,20 +100,28 @@ pub(super) async fn stream(
                 let mut events = Events::with_tokens(tokens);
                 events.account_id = account_id.clone();
                 let read = read_events(response, |event| {
-                    let value = serde_json::from_str(&tokens.scrub(&event.data))
-                        .map_err(|_| AiError::Subscription("chatgpt_incomplete"))?;
+                    let value = serde_json::from_str(&tokens.scrub(&event.data)).map_err(|_| {
+                        AiError::Parse {
+                            provider: "chatgpt_plan",
+                            detail: "invalid event JSON",
+                        }
+                    })?;
                     events.read(value, sink)
                 })
                 .await;
                 unsupported = events.unsupported;
+                if read.is_err() {
+                    interrupted_usage.add(events.observed_usage);
+                }
                 match read {
                     Ok(()) => events
                         .result
-                        .ok_or(AiError::Subscription("chatgpt_incomplete")),
+                        .ok_or(AiError::Subscription("chatgpt_temporary")),
+                    Err(e @ AiError::Parse { .. }) => Err(e),
                     Err(e @ (AiError::Subscription(_) | AiError::SubscriptionFailure { .. })) => {
                         Err(e)
                     }
-                    Err(_) => Err(AiError::Subscription("chatgpt_incomplete")),
+                    Err(_) => Err(AiError::Subscription("chatgpt_temporary")),
                 }
             }
         };
@@ -156,9 +165,16 @@ pub(super) async fn stream(
                 });
             }
             Err(e)
-                if !probe && matches!(e.code(), "chatgpt_temporary" | "chatgpt_rate_limited") =>
+                if !probe
+                    && matches!(
+                        e.code(),
+                        "chatgpt_temporary" | "chatgpt_rate_limited" | "chatgpt_empty"
+                    ) =>
             {
-                let Some(wait) = retry.next_delay(retry_after, started.elapsed()) else {
+                let Some(wait) = retry.next_delay(
+                    retry_after,
+                    started.get_or_insert_with(Instant::now).elapsed(),
+                ) else {
                     return Err(e);
                 };
                 sink(StreamEvent::Retrying {
@@ -169,7 +185,12 @@ pub(super) async fn stream(
                 });
                 tokio::time::sleep(wait).await;
             }
-            result => return result,
+            result => {
+                return result.map(|mut turn| {
+                    turn.usage.add(interrupted_usage);
+                    turn
+                })
+            }
         }
     }
 }
@@ -433,6 +454,10 @@ fn visible_models(value: Value) -> Result<Vec<PlanModel>, AiError> {
             let id = m["slug"].as_str()?.trim();
             let label = m["display_name"].as_str()?.trim();
             (!id.is_empty() && !label.is_empty()).then(|| PlanModel {
+                max_output_tokens: m["max_output_tokens"]
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| *n > 0),
                 id: id.into(),
                 label: label.into(),
                 image_input: crate::models::image_input(m),
@@ -517,6 +542,9 @@ fn request(req: &TurnRequest) -> Result<Value, AiError> {
         "include":["reasoning.encrypted_content"],
         "prompt_cache_key":req.cache_key,
     });
+    if req.max_tokens == 0 {
+        body.as_object_mut().unwrap().remove("max_output_tokens");
+    }
     if !req.effort.is_empty() && req.effort != "none" {
         body["reasoning"] = json!({"effort":req.effort});
     }
@@ -797,10 +825,10 @@ mod tests {
         }
     }
     #[test]
-    fn incomplete_is_never_success_and_unsupported_body_must_change() {
+    fn incomplete_retains_a_terminal_reason_and_unsupported_body_must_change() {
         let mut e = Events::default();
-        assert_eq!(e.read(json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}), &mut |_| {}).unwrap_err().code(), "chatgpt_incomplete");
-        assert!(e.result.is_none());
+        assert!(e.read(json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}), &mut |_| {}).unwrap());
+        assert_eq!(e.result.unwrap().stop_reason, StopReason::MaxTokens);
         let mut body = request(&req()).unwrap();
         let before = body.clone();
         assert!(drop_capability(&mut body, "tools[0]"));
@@ -815,6 +843,17 @@ mod tests {
         assert_eq!(body["stream"], true);
     }
     #[test]
+    fn recovery_uses_the_advertised_budget_or_omits_the_local_cap() {
+        let models = visible_models(json!({"models":[{"slug":"visible","display_name":"Visible","visibility":"list","max_output_tokens":131072}]})).unwrap();
+        assert_eq!(models[0].max_output_tokens, Some(131072));
+        let mut req = req();
+        req.max_tokens = 0;
+        assert!(request(&req).unwrap().get("max_output_tokens").is_none());
+        req.max_tokens = 131072;
+        assert_eq!(request(&req).unwrap()["max_output_tokens"], 131072);
+    }
+
+    #[test]
     fn models_use_only_visible_slugs_and_display_names() {
         let models = visible_models(json!({"models":[
             {"slug":"visible-slug","display_name":"Visible model","visibility":"list"},
@@ -825,6 +864,7 @@ mod tests {
         assert_eq!(
             models,
             vec![PlanModel {
+                max_output_tokens: None,
                 image_input: None,
                 id: "visible-slug".into(),
                 reasoning_efforts: Vec::new(),

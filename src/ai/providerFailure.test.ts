@@ -103,3 +103,15 @@ test.each(["en", "ar"] as const)("%s puts a known ChatGPT reset before credit pe
   expect(failure.text.split(formatted)).toHaveLength(2);
   expect(failure.text).toContain(lang === "en" ? "allowance is used up until" : "حتى");
 });
+
+test("incomplete failures retain the bounded reason in both languages", () => {
+  const error = JSON.stringify({ code: "ai.error.content_filter", kind: "policy", provider: "chatgpt_plan", details: { reason: "content_filter" }, message: "PRIVATE" });
+  for (const lang of ["en", "ar"] as const) {
+    const failure = providerFailure(error, lang);
+    expect(failure?.text).toContain("content_filter");
+    expect(failure?.text).not.toContain("PRIVATE");
+    expect(failure?.details).toEqual({ reason: "content_filter" });
+  }
+  expect(providerFailure(JSON.stringify({ code: "ai.error.response_incomplete", details: { reason: "PRIVATE\nsecret" } }), "en")?.text).not.toContain("PRIVATE");
+  expect(providerFailure("ai.error.stream_parse", "en")).toMatchObject({ kind: "other" });
+});

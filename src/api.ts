@@ -1716,7 +1716,7 @@ export const workspaceViewState = (workspace: number, context: AiContext) => inv
 export type PublicProvider = "chatgpt_plan" | "claude_code" | "openai" | "anthropic" | "other";
 export type ProviderFailureKind = "plan_limit" | "spend_blocked" | "out_of_credit" | "rate_limited" | "auth" | "model_unavailable" | "temporary" | "offline" | "context_too_long" | "policy" | "other";
 export type ProviderFailureAction = { kind: "retry" | "open_provider_page" | "open_settings" | "switch_provider"; page?: ProviderPage };
-export type PublicProviderError = { code: string; message: string; message_ar: string; kind: ProviderFailureKind; provider: PublicProvider; resets_at?: number; retry_after?: number; actions: ProviderFailureAction[] };
+export type PublicProviderError = { code: string; message: string; message_ar: string; kind: ProviderFailureKind; provider: PublicProvider; resets_at?: number; retry_after?: number; details?: { reason?: string; parse_error?: string }; actions: ProviderFailureAction[] };
 export type AiProviderStatus = {
   provider: PublicProvider;
   status: "connected" | "needs_sign_in" | "plan_limit" | "spend_blocked" | "out_of_credit" | "auth" | "ok";

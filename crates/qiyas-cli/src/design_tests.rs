@@ -355,3 +355,60 @@ async fn budget_refusal_is_not_counted_as_a_provider_request() {
     assert!(dir.path().join("run/steps.jsonl").is_file());
     assert!(dir.path().join("run/agent.log").is_file());
 }
+
+#[tokio::test]
+async fn design_steps_keep_the_incomplete_reason_and_reported_usage() {
+    struct Filtered;
+    impl Provider for Filtered {
+        fn stream_turn<'a>(
+            &'a self,
+            _req: TurnRequest,
+            sink: Sink<'a>,
+        ) -> BoxFuture<'a, Result<TurnResult, AiError>> {
+            Box::pin(async move {
+                sink(StreamEvent::Diagnostic {
+                    kind: "RESPONSE INCOMPLETE".into(),
+                    text: "ChatGPT: content_filter".into(),
+                });
+                Ok(TurnResult {
+                    content: vec![],
+                    stop_reason: StopReason::Incomplete {
+                        provider: "chatgpt_plan".into(),
+                        reason: "content_filter".into(),
+                    },
+                    usage: Usage {
+                        output_tokens: 23,
+                        ..Usage::default()
+                    },
+                })
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let trace = Arc::new(Mutex::new(Trace::default()));
+    let provider = Recorded {
+        inner: Box::new(Filtered),
+        trace: trace.clone(),
+        max_requests: 80,
+        steps: dir.path().join("steps.jsonl"),
+    };
+    let result = provider
+        .stream_turn(
+            TurnRequest {
+                cache_key: "incomplete".into(),
+                system: "Mizan".into(),
+                messages: vec![],
+                tools: vec![],
+                model: "mock".into(),
+                effort: "none".into(),
+                max_tokens: 100,
+            },
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.usage.output_tokens, 23);
+    let steps = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
+    assert!(steps.contains("provider_diagnostic") && steps.contains("content_filter"));
+    assert_eq!(trace.lock().unwrap().requests.len(), 1);
+}

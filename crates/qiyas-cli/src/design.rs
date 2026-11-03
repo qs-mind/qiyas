@@ -137,6 +137,7 @@ struct Trace {
     delegated: BTreeMap<String, (usize, Usage)>,
     calls: Vec<Call>,
     status: String,
+    failure: Option<qiyas_ai::provider_error::PublicError>,
     final_answer: String,
     resolved_model: Option<String>,
 }
@@ -164,6 +165,12 @@ struct Recorded {
     steps: PathBuf,
 }
 impl Provider for Recorded {
+    fn handles_temporary_retries(&self) -> bool {
+        self.inner.handles_temporary_retries()
+    }
+    fn recovery_output_tokens(&self, model: &str) -> u32 {
+        self.inner.recovery_output_tokens(model)
+    }
     fn image_input(&self, model: &str) -> Option<bool> {
         self.inner.image_input(model)
     }
@@ -223,6 +230,9 @@ impl Provider for Recorded {
                 .inner
                 .stream_turn(req, &mut |event| {
                     if let StreamEvent::Diagnostic { kind, text } = &event {
+                        if kind == "RESPONSE INCOMPLETE" || kind == "CLAUDE RESUME" {
+                            if let Err(error) = step(&Some(self.steps.clone()), &json!({"event":"provider_diagnostic","number":number,"kind":kind,"detail":text})) { log_error = Some(error); }
+                        }
                         if kind == "CLAUDE REQUEST USAGE" {
                             if let Ok(value) = serde_json::from_str::<Value>(text) {
                                 if let (Some(id), Ok(usage)) = (
@@ -253,6 +263,8 @@ impl Provider for Recorded {
                 .map(|r| r.usage)
                 .filter(|usage| usage.total_input() + usage.output_tokens > 0);
             let error = result.as_ref().err().map(ToString::to_string);
+            let failure = result.as_ref().err().map(AiError::public_error);
+            let stop_reason = result.as_ref().ok().map(|r| format!("{:?}", r.stop_reason));
             let elapsed_ms = started.elapsed().as_millis();
             {
                 let mut trace = self
@@ -265,7 +277,7 @@ impl Provider for Recorded {
                 request.error.clone_from(&error);
                 request.elapsed_ms = Some(elapsed_ms);
             }
-            step(&Some(self.steps.clone()), &json!({"event":"design_response","number":number,"usage":usage,"error":error,"elapsed_ms":elapsed_ms})).map_err(AiError::Stream)?;
+            step(&Some(self.steps.clone()), &json!({"event":"design_response","number":number,"usage":usage,"error":error,"failure":failure,"stop_reason":stop_reason,"elapsed_ms":elapsed_ms})).map_err(AiError::Stream)?;
             result
         })
     }
@@ -401,6 +413,7 @@ async fn run_with_provider(run: Run) -> Result<Value, String> {
     let mut trace = trace.lock().map_err(|_| "Trace lock failed")?;
     if let Err(error) = result {
         trace.status = format!("failed: {error}");
+        trace.failure = Some(error.public_error_for(&run.settings.provider));
     }
     if trace.status.is_empty() {
         trace.status = "incomplete".into();
@@ -461,7 +474,7 @@ async fn run_with_provider(run: Run) -> Result<Value, String> {
     let report = json!({
         "schema_version":1, "kind":"design_run", "provider":run.settings.provider,
         "model":run.settings.model, "resolved_model":trace.resolved_model, "language":run.settings.language, "brief":run.brief,
-        "status":trace.status, "artifacts_complete":artifacts.is_empty(), "elapsed_ms":elapsed_ms, "total_elapsed_ms":total_elapsed_ms, "max_requests":run.max_requests,
+        "status":trace.status, "failure":trace.failure, "artifacts_complete":artifacts.is_empty(), "elapsed_ms":elapsed_ms, "total_elapsed_ms":total_elapsed_ms, "max_requests":run.max_requests,
         "requests":requests.len(), "request_usage":requests, "tokens":token_stats,
         "request_scope": if owns_turn && trace.delegated.is_empty() { "delegated turn aggregate; per-request usage unavailable" } else { "provider requests" },
         "request_limit_scope": if owns_turn { "Claude Code --max-turns" } else { "provider requests" },
@@ -474,7 +487,7 @@ async fn run_with_provider(run: Run) -> Result<Value, String> {
     });
     step(
         &Some(run.output.join("steps.jsonl")),
-        &json!({"event":"design_end","status":report["status"],"requests":report["requests"],"artifact_errors":report["artifact_errors"]}),
+        &json!({"event":"design_end","status":report["status"],"failure":report["failure"],"requests":report["requests"],"artifact_errors":report["artifact_errors"]}),
     )?;
     write_json(&run.output.join("report.json"), &report)?;
     fs::write(run.output.join("report.md"), markdown(&report)).map_err(|e| e.to_string())?;

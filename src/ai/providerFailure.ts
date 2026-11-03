@@ -100,5 +100,8 @@ export function providerFailure(error: string, lang: Lang) {
       text += " " + translate(lang, "ai.failure.retryAfter", { seconds: Math.ceil(fields.retry_after) });
     }
   }
-  return { text, canContinue, kind, provider, actions, legacy: !structured };
+  const details = fields.details && typeof fields.details === "object" ? fields.details as Record<string, unknown> : undefined;
+  const reason = typeof details?.reason === "string" && /^[a-zA-Z0-9_]{1,80}$/.test(details.reason) ? details.reason : undefined;
+  if (reason) text += lang === "ar" ? ` السبب: ${reason}.` : ` Reason: ${reason}.`;
+  return { text, canContinue, kind, provider, actions, details: reason ? { reason } : undefined, legacy: !structured };
 }

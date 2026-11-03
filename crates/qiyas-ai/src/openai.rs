@@ -58,6 +58,9 @@ impl OpenAiCompatible {
 }
 
 impl Provider for OpenAiCompatible {
+    fn handles_temporary_retries(&self) -> bool {
+        !self.strict_budget
+    }
     fn image_input(&self, model: &str) -> Option<bool> {
         crate::models::known_image_input(&self.base_url, model)
     }
@@ -177,7 +180,8 @@ impl Provider for OpenAiCompatible {
             let secret = self.api_key.as_deref().unwrap_or("");
             // Only an explicit unsupported-parameter refusal can change a request field.
             // A value error must never remove the output cap.
-            let started = tokio::time::Instant::now();
+            let mut started = None;
+            let mut interrupted_usage = Usage::default();
             let mut backoff = crate::provider::RetryBackoff::default();
             loop {
                 let response = loop {
@@ -254,12 +258,13 @@ impl Provider for OpenAiCompatible {
                         &error,
                         !self.strict_budget,
                         &mut backoff,
-                        started,
+                        &mut started,
                         sink,
                         !turn.text.is_empty(),
                     )
                     .await
                     {
+                        interrupted_usage.add(turn.usage);
                         continue;
                     }
                     return Err(error);
@@ -267,7 +272,9 @@ impl Provider for OpenAiCompatible {
                 if let Ok(mut kept) = self.extras.lock() {
                     kept.extend(turn.extras());
                 }
-                return Ok(turn.finish(sink));
+                let mut result = turn.finish(sink);
+                result.usage.add(interrupted_usage);
+                return Ok(result);
             }
         })
     }
@@ -514,10 +521,18 @@ struct Turn {
 impl Turn {
     fn on_event(&mut self, data: &str, sink: Sink<'_>) -> Result<bool, AiError> {
         if data.trim() == "[DONE]" {
+            if self.finish_reason.is_none() {
+                return Err(AiError::Stream(
+                    "connection closed without finish_reason".into(),
+                ));
+            }
             return Ok(true);
         }
         let Ok(e) = serde_json::from_str::<Value>(data) else {
-            return Err(AiError::Stream("an event was not valid JSON".into()));
+            return Err(AiError::Parse {
+                provider: "openai",
+                detail: "invalid event JSON",
+            });
         };
         if let Some(err) = e.get("error") {
             let message = format!(
@@ -612,6 +627,12 @@ impl Turn {
         }
         if let Some(r) = choice["finish_reason"].as_str() {
             self.finish_reason = Some(r.to_string());
+            if matches!(r, "length" | "max_tokens" | "content_filter") {
+                sink(StreamEvent::Diagnostic {
+                    kind: "RESPONSE INCOMPLETE".into(),
+                    text: format!("openai: {r}"),
+                });
+            }
         }
         Ok(false)
     }
@@ -677,6 +698,13 @@ impl Turn {
         }
         let has_calls = !self.calls.is_empty();
         for (at, call) in self.calls.into_iter().enumerate() {
+            if self.finish_reason.as_deref() == Some("length")
+                && (call.id.is_empty()
+                    || call.name.is_empty()
+                    || !serde_json::from_str::<Value>(&call.arguments).is_ok_and(|v| v.is_object()))
+            {
+                continue;
+            }
             let id = if call.id.is_empty() {
                 format!("call_{at}")
             } else {
@@ -706,14 +734,11 @@ impl Turn {
         }
         sink(StreamEvent::Done);
         let stop_reason = match self.finish_reason.as_deref() {
+            Some("length") => crate::stream_recovery::stop("openai", "length"),
+            Some("content_filter") => crate::stream_recovery::stop("openai", "content_filter"),
             // Some servers say "stop" even when they called tools.
             _ if has_calls => StopReason::ToolUse,
             Some("stop") | None => StopReason::EndTurn,
-            Some("length") => StopReason::MaxTokens,
-            Some("content_filter") => StopReason::Refusal {
-                category: Some("content_filter".into()),
-                text: self.text,
-            },
             Some(other) => StopReason::Other(other.to_string()),
         };
         TurnResult {
@@ -1198,5 +1223,45 @@ mod tests {
         push_messages(&mut out, &Message::assistant(result.content), &extras);
         assert_eq!(out[0]["tool_calls"][0]["extra_content"], signature);
         assert!(out[0]["tool_calls"][1].get("extra_content").is_none());
+    }
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::*;
+
+    #[test]
+    fn length_and_filter_take_priority_over_tools_and_usage_is_a_snapshot() {
+        for reason in ["length", "content_filter"] {
+            let mut turn = Turn::default();
+            for event in [
+                json!({"choices":[{"delta":{"content":"Sheets next", "tool_calls":[{"index":0,"id":"finished","function":{"name":"qiyas_read","arguments":"{\"op\":\"state\",\"args\":\"{}\"}"}}]}}]}),
+                json!({"choices":[{"delta":{"tool_calls":[{"index":1,"id":"unfinished","function":{"name":"qiyas_execute","arguments":"{\"op\":"}}]},"finish_reason":reason}],"usage":{"prompt_tokens":100,"completion_tokens":23}}),
+                json!({"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":23}}),
+            ] {
+                turn.on_event(&event.to_string(), &mut |_| {}).unwrap();
+            }
+            turn.on_event("[DONE]", &mut |_| {}).unwrap();
+            let result = turn.finish(&mut |_| {});
+            assert_eq!(result.usage.output_tokens, 23);
+            assert_eq!(result.usage.total_input(), 100);
+            if reason == "length" {
+                assert_eq!(result.stop_reason, StopReason::MaxTokens);
+                assert_eq!(Message::assistant(result.content).tool_uses().count(), 1);
+            } else {
+                assert!(
+                    matches!(result.stop_reason, StopReason::Incomplete { reason, .. } if reason == "content_filter")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_json_is_not_a_retryable_stream_break() {
+        let error = Turn::default().on_event("{", &mut |_| {}).unwrap_err();
+        assert_eq!(error.code(), "stream_parse");
+        assert!(!error.retryable());
+        let error = Turn::default().on_event("[DONE]", &mut |_| {}).unwrap_err();
+        assert!(error.retryable());
     }
 }

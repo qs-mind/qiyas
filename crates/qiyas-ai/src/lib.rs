@@ -38,6 +38,7 @@ pub mod provider;
 mod result;
 mod result_envelope;
 mod revision;
+mod stream_recovery;
 pub mod surface;
 mod surface_io;
 mod tool_output;

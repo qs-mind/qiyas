@@ -155,14 +155,12 @@ fn interrupted_streams_never_commit_calls() {
         events.read(value, &mut |_| {}).unwrap();
     }
     assert!(events.result.is_none());
-    assert_eq!(
-        events
-            .read(json!({"type":"response.incomplete"}), &mut |_| {})
-            .unwrap_err()
-            .code(),
-        "chatgpt_incomplete"
+    events
+        .read(json!({"type":"response.incomplete"}), &mut |_| {})
+        .unwrap();
+    assert!(
+        matches!(events.result.unwrap().stop_reason, StopReason::Incomplete { reason, .. } if reason == "unknown")
     );
-    assert!(events.result.is_none());
 }
 
 struct Replay {
@@ -202,9 +200,7 @@ impl Provider for Replay {
                     sink,
                 )?;
             }
-            events
-                .result
-                .ok_or(AiError::Subscription("chatgpt_incomplete"))
+            events.result.ok_or(AiError::Subscription("stream_parse"))
         })
     }
 }
@@ -492,7 +488,7 @@ fn invalid_stream_items_return_an_error_without_panicking() {
                 )
                 .unwrap_err()
                 .code(),
-            "chatgpt_incomplete"
+            "stream_parse"
         );
     }
 }
@@ -521,4 +517,186 @@ fn refusal_credentials_split_between_deltas_are_redacted() {
     assert!(!text.contains(&tokens.access_token));
     assert!(!text.contains(tokens.refresh_token.as_ref().unwrap()));
     assert!(text.starts_with("Cannot repeat "));
+}
+
+fn incomplete(reason: &str, output: Value) -> Value {
+    json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":reason},"output":output,"usage":{"input_tokens":100,"output_tokens":23}}})
+}
+
+#[test]
+fn incomplete_keeps_finished_calls_and_text_but_not_unfinished_arguments() {
+    let mut values = call(
+        "finished",
+        "qiyas_read",
+        json!({"op":"records","args":{"collection":"entities","fields":["key","bounds"]}}),
+    );
+    values.pop();
+    values.extend([
+        json!({"type":"response.output_text.delta","output_index":2,"item_id":"text","delta":"The terminal plan is ready; sheets"}),
+        json!({"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","id":"open","call_id":"unfinished","name":"qiyas_execute","arguments":"{\"op\":\"batch\","}}),
+        incomplete("max_output_tokens", json!([])),
+    ]);
+    let mut state = Events::default();
+    for value in values {
+        state.read(value, &mut |_| {}).unwrap();
+    }
+    let turn = state.result.unwrap();
+    assert_eq!(turn.stop_reason, StopReason::MaxTokens);
+    assert_eq!(turn.usage.output_tokens, 23);
+    let message = crate::Message::assistant(turn.content);
+    assert_eq!(
+        message.tool_uses().map(|(id, _, _)| id).collect::<Vec<_>>(),
+        ["finished"]
+    );
+    assert!(message
+        .content
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Text { text } if text.ends_with("sheets"))));
+}
+
+#[test]
+fn content_filter_has_a_clear_nonretryable_failure_with_details() {
+    let mut events = Events::default();
+    events
+        .read(incomplete("content_filter", json!([])), &mut |_| {})
+        .unwrap();
+    let StopReason::Incomplete { provider, reason } = events.result.unwrap().stop_reason else {
+        panic!("expected a provider stop")
+    };
+    let error = AiError::Incomplete { provider, reason };
+    assert!(!error.retryable());
+    assert!(error.to_string().contains("content_filter"));
+    let public = serde_json::to_value(error.public_error_for("chatgpt_plan")).unwrap();
+    assert_eq!(public["kind"], "policy");
+    assert_eq!(public["details"]["reason"], "content_filter");
+    assert!(public["message_ar"]
+        .as_str()
+        .unwrap()
+        .contains("content_filter"));
+}
+
+#[tokio::test]
+async fn request_36_retries_once_then_continues_partial_work_without_duplicate_usage_or_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(Some(Session::new_blank(
+        &dir.path().join("terminal.dxf"),
+        6,
+    ))));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut values = (0..35)
+        .map(|n| {
+            call(
+                &format!("read-{n}"),
+                "qiyas_read",
+                json!({"op":"state","args":"{}"}),
+            )
+        })
+        .collect::<Vec<_>>();
+    // The live log stops at request 36; its raw reason was lost. This is a minimal terminal event.
+    let edit =
+        json!({"op":"run","args":{"command":{"type":"draw","kind":"line","a":[0,0],"b":[400,0]}}});
+    let mut first = call("edit-first", "qiyas_execute", edit.clone());
+    first.pop();
+    first.push(json!({"type":"response.output_text.delta","output_index":2,"item_id":"retained-text","delta":"The terminal plan is retained."}));
+    first.push(incomplete("max_output_tokens", json!([])));
+    let mut second = call("edit-retry", "qiyas_execute", edit);
+    second.pop();
+    second.push(incomplete("max_output_tokens", json!([])));
+    values.extend([
+        first,
+        second,
+        text_reply("Terminal sheets can now continue."),
+    ]);
+    let log = AgentLog::evaluation(dir.path().join("agent.log"));
+    let mut agent = Agent::new(
+        Box::new(Replay {
+            values,
+            requests: requests.clone(),
+            endpoint: None,
+        }),
+        session,
+        AgentSettings {
+            model: "mock-model".into(),
+            max_tokens: 100,
+            ..AgentSettings::default()
+        },
+    )
+    .with_log(log);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4096);
+    agent
+        .run_turn(
+            "Continue the terminal drawing and sheets.".into(),
+            tx,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(serde_json::to_string(&agent.snapshot().transcript)
+        .unwrap()
+        .contains("The terminal plan is retained."));
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 38);
+    assert_eq!(requests[35]["input"], requests[36]["input"]);
+    assert_eq!(requests[35]["max_output_tokens"], 100);
+    assert_eq!(
+        requests[36]["max_output_tokens"],
+        crate::agent::MAX_TOKENS_CAP
+    );
+    let history = requests[37]["input"].to_string();
+    assert!(history.contains("Continue from the retained output"));
+    let mut edits = 0;
+    let mut usage = Usage::default();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AgentEvent::ToolCall { name, .. } if name == "qiyas_execute" => edits += 1,
+            AgentEvent::Done { usage: total } => usage = total,
+            _ => {}
+        }
+    }
+    assert_eq!(edits, 1);
+    assert_eq!(usage.output_tokens, 38 * 23);
+    assert_eq!(usage.total_input(), 38 * 100);
+    let log = std::fs::read_to_string(dir.path().join("agent.log")).unwrap();
+    assert!(log.contains("RESPONSE INCOMPLETE") && log.contains("max_output_tokens"));
+}
+
+#[tokio::test]
+async fn content_filter_retains_text_stops_once_and_never_executes_calls() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut values = call(
+        "not-run",
+        "qiyas_execute",
+        json!({"op":"batch","args":{"commands":[{"type":"dim_edit","target":{"handle":462},"line_point":[4.2,-0.8]}]}}),
+    );
+    values.pop();
+    values.push(incomplete("content_filter", json!([{"type":"message","content":[{"type":"output_text","text":"Completed plan; sheets remain."}]}])));
+    let mut agent = Agent::new(
+        Box::new(Replay {
+            values: vec![values],
+            requests: requests.clone(),
+            endpoint: None,
+        }),
+        Arc::new(Mutex::new(None)),
+        AgentSettings {
+            model: "mock-model".into(),
+            ..AgentSettings::default()
+        },
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    let error = agent
+        .run_turn(
+            "Continue the terminal sheets".into(),
+            tx,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "content_filter");
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event, AgentEvent::ToolCall { .. }));
+    }
+    assert!(serde_json::to_string(agent.history())
+        .unwrap()
+        .contains("Completed plan; sheets remain."));
 }
